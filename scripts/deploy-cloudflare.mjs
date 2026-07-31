@@ -27,6 +27,7 @@ const npmExecutable = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const databaseName = 'edge-kintai-db';
 const databaseIdPlaceholder = '00000000-0000-0000-0000-000000000000';
 const setupSecretName = 'SETUP_TOKEN';
+const weeklyHolidayCron = '0 18 * * 1';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function heading(message) {
@@ -91,12 +92,21 @@ function readConfiguration() {
   if (!existsSync(configPath)) throw new Error('wrangler.jsonc 不存在');
   const source = readFileSync(configPath, 'utf8');
 
+  if (/"cpu_ms"\s*:/.test(source)) {
+    throw new Error(
+      'Workers Free 不支持自定义 limits.cpu_ms；请删除该字段并使用平台自动提供的 10 ms CPU 上限',
+    );
+  }
+
   const workerNames = [...source.matchAll(
     /^\s*"name"\s*:\s*"([^"]+)"\s*,\s*\r?\n\s*"main"\s*:/gm,
   )];
   const databaseNames = [...source.matchAll(/"database_name"\s*:\s*"([^"]+)"/g)];
   const databaseIds = [...source.matchAll(/"database_id"\s*:\s*"([^"]+)"/g)];
   const dbBindings = [...source.matchAll(/"binding"\s*:\s*"DB"/g)];
+  const cronSchedules = [...source.matchAll(
+    /"crons"\s*:\s*\[\s*"([^"]+)"\s*\]/g,
+  )];
 
   if (workerNames.length !== 1 || !workerNames[0][1]) {
     throw new Error('wrangler.jsonc 必须包含唯一的 Worker name');
@@ -109,6 +119,11 @@ function readConfiguration() {
   ) {
     throw new Error(
       `wrangler.jsonc 必须仅包含一个 DB 绑定，且 database_name 必须是 ${databaseName}`,
+    );
+  }
+  if (cronSchedules.length !== 1 || cronSchedules[0][1] !== weeklyHolidayCron) {
+    throw new Error(
+      `wrangler.jsonc 必须包含唯一的每周节假日刷新计划 ${weeklyHolidayCron}`,
     );
   }
 
@@ -202,7 +217,28 @@ function ensureLogin() {
     result = captureWrangler(['whoami', '--json']);
   }
 
-  parseJsonOutput('确认 Wrangler 登录', result);
+  const identity = parseJsonOutput('确认 Wrangler 登录', result);
+  const accounts = identity?.accounts;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    throw new Error('Wrangler 登录没有可用的 Cloudflare 账户');
+  }
+
+  const selectedAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  if (selectedAccountId) {
+    if (
+      !/^[0-9a-f]{32}$/i.test(selectedAccountId)
+      || !accounts.some((account) => account?.id === selectedAccountId)
+    ) {
+      throw new Error(
+        'CLOUDFLARE_ACCOUNT_ID 无效，或当前 Wrangler 登录无权访问该账户',
+      );
+    }
+  } else if (accounts.length !== 1) {
+    throw new Error(
+      '当前登录可访问多个 Cloudflare 账户；请使用 Wrangler auth profile 仅授权目标账户，或显式设置 CLOUDFLARE_ACCOUNT_ID',
+    );
+  }
+
   console.log('Wrangler 登录已确认。');
 }
 

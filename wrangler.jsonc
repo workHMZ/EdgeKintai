@@ -4,9 +4,6 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-29",
   "compatibility_flags": ["nodejs_compat"],
-  "limits": {
-    "cpu_ms": 10
-  },
 
   // Static files bypass the Worker and therefore do not consume dynamic
   // Workers Free requests. Only API paths invoke the Worker first.
@@ -22,6 +19,10 @@
     "DEFAULT_TRIP_TYPE": "round_trip",
     "OVERTIME_THRESHOLD_HOURS": "180",
     "SESSION_TTL_SECONDS": "604800"
+  },
+
+  "secrets": {
+    "required": ["SETUP_TOKEN"]
   },
 
   "d1_databases": [
@@ -46,7 +47,7 @@
 
   // Monday 03:00 JST (Sunday 18:00 UTC): refresh the official holiday cache.
   "triggers": {
-    "crons": ["0 18 * * 0"]
+    "crons": ["0 18 * * 1"]
   },
 
   "observability": {

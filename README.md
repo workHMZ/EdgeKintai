@@ -40,8 +40,11 @@ EdgeKintai 是面向日本工作场景的多用户勤怠管理工具，运行在
 | 动态 Worker 请求 | 100,000 次/日（00:00 UTC 重置） | 只有 `/api/*` 计入，适合个人和小团队勤怠 |
 | HTTP / Cron CPU | 每次 10 ms | Excel 移到浏览器；API 避免大型服务器端生成 |
 | 内存 | 128 MB | 请求仅处理当前用户或当月数据 |
+| Workers | 每账户 100 个 | 使用 1 个 |
 | Worker 压缩包 | 3 MB | 静态文件与 API bundle 分离 |
 | Static Assets | 请求免费且不限量；20,000 个文件/版本，单文件 25 MiB | 页面、CSS 和浏览器端代码均在此层 |
+| Cron Triggers | 每账户 5 个 | 使用 1 个，每周一 03:00 JST 更新节假日缓存 |
+| D1 数据库 | 每账户 10 个 | 使用 1 个 APAC 数据库 |
 | D1 读取 | 5,000,000 行/日 | 主要查询有索引，月度报表按用户和日期范围读取 |
 | D1 写入 | 100,000 行/日 | 日常打卡、设置和会话写入量很小 |
 | D1 存储 | 500 MB/数据库，账户合计 5 GB | 结构化文本数据，不存储 Excel 二进制文件 |
@@ -49,6 +52,8 @@ EdgeKintai 是面向日本工作场景的多用户勤怠管理工具，运行在
 参考：[Workers 限制](https://developers.cloudflare.com/workers/platform/limits/)、[Workers 价格与静态资源计费](https://developers.cloudflare.com/workers/platform/pricing/)、[Static Assets 计费](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/)、[D1 价格](https://developers.cloudflare.com/d1/platform/pricing/)、[D1 限制](https://developers.cloudflare.com/d1/platform/limits/)。
 
 Free 计划的 10 ms 是 CPU 时间，等待 D1 或网络响应的时间不计入。但认证和节假日 CSV 解析仍会使用 CPU，所以「适合 Free」不等于任何负载下都保证不超限。上线后应在 Cloudflare 仪表板观察 CPU 和 Error 1102；大规模团队或高频自动化请求应重新评估 Paid 计划。
+
+Free 计划会自动应用 10 ms CPU 上限，`wrangler.jsonc` 不应设置 `limits.cpu_ms`；Cloudflare 只允许付费 Standard Usage Model 自定义该字段。部署助手会在发布前检查并拒绝不兼容配置。
 
 修改密码已拆为「验证当前密码」和「写入新密码」两个请求，每次最多执行一次 PBKDF2；短时重新验证凭据只能消费一次。对官方 CSV 中不存在的年份还会缓存 15 分钟失败状态，避免重复解析占用 Free CPU。
 
@@ -74,6 +79,8 @@ openssl rand -hex 32
 npm ci
 npm run deploy:cf
 ```
+
+如果 Wrangler 登录可访问多个 Cloudflare 账户，部署助手会拒绝猜测目标。请使用 `wrangler auth create` / `wrangler auth activate` 创建只授权目标账户的目录 profile，或在命令前显式设置非机密的 `CLOUDFLARE_ACCOUNT_ID`。助手会验证该 ID 确实属于当前登录。
 
 `deploy:cf` 按以下顺序执行，任何一步失败都会立即停止：
 
