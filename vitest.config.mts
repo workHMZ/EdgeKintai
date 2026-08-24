@@ -25,6 +25,7 @@ export default defineConfig({
           DEFAULT_CLOCK_OUT: '19:00',
           OVERTIME_THRESHOLD_HOURS: '180',
           SESSION_TTL_SECONDS: '604800',
+          HEALTH_PROBE_ALLOWED_ORIGINS: 'https://status.example.test,https://dashboard.example.test',
           SETUP_TOKEN: 'test-setup-token-0123456789abcdef0123456789abcdef',
           TEST_MIGRATIONS: migrations,
         },

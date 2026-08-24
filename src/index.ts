@@ -11,15 +11,42 @@ import {
   syncCurrentAndNextOfficialHolidays,
 } from './utils/holidays';
 import { RequestValidationError } from './utils/validation';
+import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 
 const app = new Hono<AuthEnv>();
+
+function healthProbeAllowedOrigins(value: string): string[] {
+  return value
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
 
 app.use('/api/*', secureHeaders({
   contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
   permissionsPolicy: { camera: [], microphone: [], geolocation: [] },
   xFrameOptions: 'DENY',
 }));
+
+app.use('/health', secureHeaders({
+  contentSecurityPolicy: { defaultSrc: ["'none'"], frameAncestors: ["'none'"] },
+  crossOriginResourcePolicy: 'cross-origin',
+  permissionsPolicy: { camera: [], microphone: [], geolocation: [] },
+  xFrameOptions: 'DENY',
+}));
+
+app.use('/health', async (c, next) => {
+  c.header('X-Request-Id', crypto.randomUUID());
+  c.header('Cache-Control', 'no-store');
+  await next();
+});
+
+app.use('/health', (c, next) => cors({
+  origin: healthProbeAllowedOrigins(c.env.HEALTH_PROBE_ALLOWED_ORIGINS),
+  allowMethods: ['GET'],
+  maxAge: 86400,
+})(c, next));
 
 app.use('/api/*', async (c, next) => {
   const requestId = crypto.randomUUID();
@@ -38,7 +65,7 @@ app.use('/api/*', async (c, next) => {
   await next();
 });
 
-app.get('/api/health', (c) => c.json({ ok: true, service: 'edge-kintai' }));
+app.get('/health', (c) => c.json({ ok: true, service: 'edge-kintai' }));
 
 app.get('/api/health/ready', authMiddleware, async (c) => {
   await c.env.DB.prepare('SELECT 1 AS ok').first();

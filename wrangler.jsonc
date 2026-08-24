@@ -6,11 +6,11 @@
   "compatibility_flags": ["nodejs_compat"],
 
   // Static files bypass the Worker and therefore do not consume dynamic
-  // Workers Free requests. Only API paths invoke the Worker first.
+  // Workers Free requests. Only API paths and the health probe invoke it first.
   "assets": {
     "directory": "./public",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/health"]
   },
 
   "vars": {
@@ -20,7 +20,8 @@
     "DEFAULT_CLOCK_IN": "10:00",
     "DEFAULT_CLOCK_OUT": "19:00",
     "OVERTIME_THRESHOLD_HOURS": "180",
-    "SESSION_TTL_SECONDS": "604800"
+    "SESSION_TTL_SECONDS": "604800",
+    "HEALTH_PROBE_ALLOWED_ORIGINS": ""
   },
 
   "secrets": {
