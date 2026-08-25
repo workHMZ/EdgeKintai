@@ -16,6 +16,15 @@ const MAX_SYNC_YEARS = 10;
 const MAX_CSV_BYTES = 1_000_000;
 const FAILED_SYNC_RETRY_MINUTES = 15;
 
+// Standing Holiday Act rules alone cannot reproduce 2016-2021: Emperor's
+// Birthday moved from 12/23 to 2/23 (in force from 2020, with no such holiday
+// in 2019), the 2019 imperial succession added 4/30, 5/1, 5/2 and 10/22, and
+// the Olympic Acts moved Marine Day, Mountain Day and Sports Day in both 2020
+// and 2021. The vernal/autumnal equinox approximations are only published for
+// 1980-2099. Anything outside this window must come from the official CSV.
+const RULE_BASED_MIN_YEAR = 2022;
+const RULE_BASED_MAX_YEAR = 2099;
+
 export class HolidayDataUnavailableError extends Error {
   readonly year: number;
 
@@ -282,8 +291,14 @@ function unavailableHolidayData(year: number): HolidayData {
   };
 }
 
+/**
+ * The generator below only encodes the *standing* Holiday Act rules. Outside
+ * RULE_BASED_MIN_YEAR..RULE_BASED_MAX_YEAR it would silently produce a wrong
+ * calendar, so those years are reported as unavailable and are resolved from
+ * the Cabinet Office CSV by `getRequiredHolidayData` instead.
+ */
 function ruleBasedHolidayData(year: number): HolidayData | null {
-  if (year < 2016) return null; // Mountain day established 2016
+  if (year < RULE_BASED_MIN_YEAR || year > RULE_BASED_MAX_YEAR) return null;
   const fallback = generateRuleBasedHolidays(year);
   return {
     year,
@@ -376,9 +391,14 @@ export async function getHolidayData(
     try {
       validateOfficialYear(year, holidays);
       const syncedTimestamp = parseDatabaseTimestamp(state.synced_at);
-      const stale = syncedTimestamp === null
+      const outdated = syncedTimestamp === null
         || now.getTime() - syncedTimestamp > CACHE_FRESH_MS
         || now.getTime() < syncedTimestamp;
+      // Only the current and future years are refreshed by the weekly job. A
+      // year that has already ended cannot gain or lose holidays, so age alone
+      // must not mark its cache incomplete for the rest of time.
+      const stale = syncedTimestamp === null
+        || (outdated && year >= currentAndNextJstYears(now)[0]);
       return {
         year,
         holidays,
@@ -516,9 +536,12 @@ export async function syncOfficialHolidays(
 }
 
 /**
- * Return data safe for monthly calculations. Uncached years are fetched on
- * demand; if the official source and bundled fallback are both unavailable we
- * fail closed instead of counting national holidays as ordinary workdays.
+ * Return data safe for monthly calculations. An authoritative cache is used as
+ * is, and a year the standing rules reproduce exactly is served from those
+ * rules without a network call. Only a year that can be neither cached nor
+ * derived is fetched on demand, throttled by `holiday_sync_failures`. If the
+ * official source is unavailable too we fail closed instead of counting
+ * national holidays as ordinary workdays.
  */
 export async function getRequiredHolidayData(
   env: CloudflareBindings,

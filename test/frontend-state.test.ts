@@ -18,6 +18,12 @@ interface TestHooks {
   ) => boolean;
   loadToday: () => Promise<boolean>;
   handlePotentialDateRollover: () => Promise<boolean>;
+  withBusy: (
+    button: { disabled: boolean; innerHTML: string; textContent: string } | null | undefined,
+    label: string,
+    operation: () => Promise<unknown>,
+  ) => Promise<unknown>;
+  loadMonthData: (monthValue: string, force: boolean) => Promise<{ total_work_minutes: number }>;
   getLastObservedDate: () => string;
   setLastObservedDate: (val: string) => void;
   setUser: (user: unknown) => void;
@@ -39,6 +45,8 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
       isStalePreviousDayRecord,
       loadToday,
       handlePotentialDateRollover,
+      withBusy,
+      loadMonthData,
       getLastObservedDate: () => lastObservedDate,
       setLastObservedDate: (val) => { lastObservedDate = val; },
       setUser: (u) => { state.user = u; },
@@ -235,5 +243,62 @@ describe('Frontend Pure State Logic', () => {
     await expect(hooks.handlePotentialDateRollover()).resolves.toBe(false);
     expect(hooks.getLastObservedDate()).toBe('2000-01-01');
     expect(callCount).toBe(2);
+  });
+
+  it('still performs the action when the submit event carries no submitter', async () => {
+    const { withBusy } = loadFrontendHooks();
+    let performed = 0;
+
+    // Programmatic submits and browsers without SubmitEvent.submitter must not
+    // silently skip the save.
+    await withBusy(null, '保存中…', async () => { performed += 1; });
+    await withBusy(undefined, '保存中…', async () => { performed += 1; });
+    expect(performed).toBe(2);
+
+    // A disabled control still guards against a double submit.
+    await withBusy({ disabled: true, innerHTML: '', textContent: '' }, '保存中…', async () => {
+      performed += 1;
+    });
+    expect(performed).toBe(2);
+
+    const button = { disabled: false, innerHTML: '<span>保存</span>', textContent: '保存' };
+    await withBusy(button, '保存中…', async () => {
+      expect(button.disabled).toBe(true);
+      performed += 1;
+    });
+    expect(performed).toBe(3);
+    expect(button.disabled).toBe(false);
+    expect(button.innerHTML).toBe('<span>保存</span>');
+  });
+
+  it('does not let a forced month reload adopt a request that predates the write', async () => {
+    const release: Array<() => void> = [];
+    let requests = 0;
+    const hooks = loadFrontendHooks((path) => {
+      expect(path).toBe('/api/attendance/2026/7');
+      requests += 1;
+      const attempt = requests;
+      return new Promise((resolve) => {
+        release.push(() => resolve({
+          year: 2026,
+          month: 7,
+          records: [],
+          total_work_minutes: attempt * 100,
+        }));
+      });
+    });
+
+    const beforeWrite = hooks.loadMonthData('2026-07', false);
+    const afterWrite = hooks.loadMonthData('2026-07', true);
+    expect(requests).toBe(2);
+
+    release[0]();
+    release[1]();
+    expect((await afterWrite).total_work_minutes).toBe(200);
+    expect((await beforeWrite).total_work_minutes).toBe(100);
+
+    // The superseded response must not be left behind in the cache either.
+    expect((await hooks.loadMonthData('2026-07', false)).total_work_minutes).toBe(200);
+    expect(requests).toBe(2);
   });
 });

@@ -824,7 +824,7 @@
         handleAuthenticatedError(error, '勤務を記録できませんでした。');
       }
     });
-    if (state.today) renderToday(state.today);
+    if (state.today) renderToday();
   }
 
   async function handleClockOut() {
@@ -859,7 +859,7 @@
         handleAuthenticatedError(error, '退勤を記録できませんでした。');
       }
     });
-    if (state.today) renderToday(state.today);
+    if (state.today) renderToday();
   }
 
   let calendarRequestVersion = 0;
@@ -1667,7 +1667,9 @@
     const valid = validMonthValue(monthValue);
     if (!valid) throw new Error('年月が不正です。');
     const cached = state.monthCache.get(valid);
-    if (cached && typeof cached.then === 'function') return cached;
+    // A cached entry is either a resolved summary or an in-flight promise; both
+    // are reusable when not forcing. A forced reload must never adopt a request
+    // that started before the write it is meant to reflect.
     if (!force && cached) return cached;
     if (force) state.monthCache.delete(valid);
     const [year, month] = splitMonth(valid);
@@ -1872,7 +1874,11 @@
   }
 
   async function withBusy(button, label, operation) {
-    if (!button || button.disabled) return;
+    // Callers pass event.submitter, which is null for a programmatic submit and
+    // undefined on browsers without SubmitEvent.submitter. Losing the busy
+    // indicator is acceptable; silently dropping the operation is not.
+    if (!button) return operation();
+    if (button.disabled) return;
     const original = button.innerHTML;
     button.disabled = true;
     button.textContent = label;

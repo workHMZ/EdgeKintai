@@ -1064,4 +1064,93 @@ describe('EdgeKintai API', () => {
       .first<{ count: number }>();
     expect(count?.count).toBeGreaterThanOrEqual(2);
   });
+
+  it('rejects clock punches on a future date while still allowing a plan', async () => {
+    const { cookie } = await setupAdmin();
+
+    const completedShift = await jsonRequest('/api/attendance/2099-12-31', 'PUT', {
+      work_type: 'office',
+      clock_in: '09:00',
+      clock_out: '18:00',
+      break_minutes: 60,
+    }, cookie);
+    expect(completedShift.status).toBe(400);
+    expect(await completedShift.json()).toMatchObject({
+      error: expect.stringContaining('未来の日付'),
+    });
+
+    const openShift = await jsonRequest('/api/attendance/2099-12-31', 'PUT', {
+      work_type: 'remote',
+      clock_in: '09:00',
+    }, cookie);
+    expect(openShift.status).toBe(400);
+
+    const stored = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM attendance WHERE work_date = ?',
+    ).bind('2099-12-31').first<{ count: number }>();
+    expect(stored?.count).toBe(0);
+
+    // Scheduling a non-working day ahead of time carries no worked minutes and
+    // stays allowed.
+    const plannedLeave = await jsonRequest('/api/attendance/2099-12-31', 'PUT', {
+      work_type: 'paid_leave',
+    }, cookie);
+    expect(plannedLeave.status).toBe(200);
+
+    // Today is not the future; the boundary must stay inclusive.
+    const todayShift = await jsonRequest(`/api/attendance/${todayJST()}`, 'PUT', {
+      work_type: 'office',
+      clock_in: '09:00',
+      clock_out: '18:00',
+      break_minutes: 60,
+    }, cookie);
+    expect(todayShift.status).toBe(200);
+  });
+
+  it('treats an explicitly cleared one-way fare as zero, not as the profile default', async () => {
+    const { cookie } = await setupAdmin();
+
+    const omitted = await jsonRequest('/api/attendance/2026-07-06', 'PUT', {
+      work_type: 'office',
+      transport_trip_type: 'one_way',
+    }, cookie);
+    expect(omitted.status).toBe(200);
+    expect(await omitted.json()).toMatchObject({
+      record: { transport_one_way_fee: 220, transport_fee: 220 },
+    });
+
+    const cleared = await jsonRequest('/api/attendance/2026-07-07', 'PUT', {
+      work_type: 'office',
+      transport_one_way_fee: null,
+      transport_trip_type: 'one_way',
+    }, cookie);
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toMatchObject({
+      record: { transport_one_way_fee: 0, transport_fee: 0 },
+    });
+  });
+
+  it('writes one created_at format for the bootstrap admin and for later users', async () => {
+    const { cookie } = await setupAdmin();
+    const created = await jsonRequest('/api/admin/users', 'POST', {
+      username: 'worker1',
+      display_name: '作業 花子',
+      password: 'strong-password-123',
+    }, cookie);
+    expect(created.status).toBe(201);
+
+    const rows = await env.DB.prepare('SELECT username, created_at FROM users ORDER BY id')
+      .all<{ username: string; created_at: string }>();
+    expect(rows.results).toHaveLength(2);
+    for (const row of rows.results) {
+      expect(row.created_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    }
+
+    // The setup audit row correlates on username + created_at inside one batch,
+    // so it must still land with the SQLite-formatted timestamp.
+    const setupAudit = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'initial_setup'",
+    ).first<{ count: number }>();
+    expect(setupAudit?.count).toBe(1);
+  });
 });

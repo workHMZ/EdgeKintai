@@ -25,6 +25,14 @@ export function nowTimeJST(now = new Date()): string {
   return formatTime(nowJST(now));
 }
 
+/**
+ * Render a UTC instant the way SQLite's `datetime('now')` does, so explicitly
+ * bound timestamps stay byte-comparable with column defaults.
+ */
+export function toSqliteDateTime(date: Date): string {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 export function timeToMinutes(time: string): number {
   const [hours, minutes] = time.split(':').map(Number);
   return hours * 60 + minutes;

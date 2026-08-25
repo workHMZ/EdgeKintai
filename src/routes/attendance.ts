@@ -35,6 +35,17 @@ function fareTotal(oneWayFare: number, tripType: TransportTripType): number {
   return oneWayFare * (tripType === 'round_trip' ? 2 : 1);
 }
 
+/**
+ * `undefined` means the caller omitted the field, so the stored or profile
+ * default applies. An explicit `null` (or an empty string) is the caller
+ * clearing the fare and must resolve to 0 instead of silently re-applying a
+ * default the caller just removed.
+ */
+function resolveOneWayFare(requested: number | null | undefined, fallback: number): number {
+  if (requested === undefined) return fallback;
+  return requested ?? 0;
+}
+
 function isClockable(workType: WorkType): workType is 'office' | 'remote' {
   return workType === 'office' || workType === 'remote';
 }
@@ -159,7 +170,6 @@ attendance.post('/clock-in', async (c) => {
   }
 
   const clockIn = nullableTime(body.clock_in, '出勤時刻') ?? currentTime;
-  if (!clockIn) throw new RequestValidationError('出勤時刻は必須です');
 
   const defaults = getUserCommuteDefaults(c.env, user);
   const breakMinutes = boundedInteger(
@@ -195,7 +205,9 @@ attendance.post('/clock-in', async (c) => {
   const transportDestination = workType === 'office'
     ? (requestedDestination ?? defaults.transport_destination)
     : '';
-  const oneWayFare = workType === 'office' ? (requestedFare ?? defaults.one_way_fare) : 0;
+  const oneWayFare = workType === 'office'
+    ? resolveOneWayFare(requestedFare, defaults.one_way_fare)
+    : 0;
   const totalFare = workType === 'office' ? fareTotal(oneWayFare, tripType) : 0;
 
   const upsert = c.env.DB.prepare(
@@ -245,7 +257,6 @@ attendance.post('/clock-out', async (c) => {
   assertOnlyKeys(body, ['clock_out', 'break_minutes']);
   const now = new Date();
   const clockOut = nullableTime(body.clock_out, '退勤時刻') ?? nowTimeJST(now);
-  if (!clockOut) throw new RequestValidationError('退勤時刻は必須です');
   const date = todayJST(now);
   const currentTime = nowTimeJST(now);
 
@@ -363,15 +374,25 @@ attendance.put('/:date', async (c) => {
     0,
     100_000,
   );
-  let oneWayFare = requestedFare
-    ?? (preserveExistingCommute
+  let oneWayFare = resolveOneWayFare(
+    requestedFare,
+    preserveExistingCommute
       ? existing.transport_one_way_fee ?? defaults.one_way_fare
-      : defaults.one_way_fare);
+      : defaults.one_way_fare,
+  );
 
   if (isClockable(workType)) {
     if (clockIn === undefined) clockIn = existing?.clock_in ?? null;
     if (clockOut === undefined) clockOut = existing?.clock_out ?? null;
     if (!clockIn && clockOut) throw new RequestValidationError('退勤時刻を入力する前に出勤時刻を入力してください');
+
+    const now = new Date();
+    const today = todayJST(now);
+    // A future date can only hold a plan, never worked time. Without this an
+    // off-by-one year silently adds work minutes to a month nobody reviews yet.
+    if ((clockIn || clockOut) && date > today) {
+      throw new RequestValidationError('未来の日付に出退勤時刻は記録できません');
+    }
 
     if (clockIn && clockOut) {
       const span = shiftSpanMinutes(clockIn, clockOut);
@@ -382,8 +403,6 @@ attendance.put('/:date', async (c) => {
         throw new RequestValidationError('休憩時間は勤務時間を超えて指定できません');
       }
     } else if (clockIn && !clockOut) {
-      const now = new Date();
-      const today = todayJST(now);
       const currentTime = nowTimeJST(now);
       const yesterday = previousDate(today);
       // Mutual exclusion only applies within the active window (today / yesterday)

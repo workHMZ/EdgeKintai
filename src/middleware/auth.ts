@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { User } from '../types';
 import { getSessionTtlSeconds } from '../utils/config';
+import { toSqliteDateTime } from '../utils/time';
 
 export type AuthEnv = {
   Variables: {
@@ -20,10 +21,6 @@ const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function toSqliteDateTime(date: Date): string {
-  return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
 async function hashSessionToken(token: string): Promise<string> {

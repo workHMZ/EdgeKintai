@@ -4,6 +4,7 @@ import { stringifyAuditJson } from '../utils/audit';
 import { getPublicConfig } from '../utils/config';
 import { hashPassword, verifyPassword, verifySecret } from '../utils/password';
 import { checkRateLimit } from '../utils/rate-limit';
+import { toSqliteDateTime } from '../utils/time';
 import {
   authMiddleware,
   clearSessionCookie,
@@ -190,7 +191,10 @@ auth.post('/setup', async (c) => {
   );
   const defaultWorkType = defaultWorkTypeValue(body.default_work_type, 'office');
   const passwordHash = await hashPassword(password);
-  const createdAt = new Date().toISOString();
+  // Must match SQLite's `datetime('now')` default used for every other user,
+  // both so the column keeps one format and so the audit statement below can
+  // correlate on it inside the same batch.
+  const createdAt = toSqliteDateTime(new Date());
 
   const insert = c.env.DB.prepare(
     `INSERT INTO users (
