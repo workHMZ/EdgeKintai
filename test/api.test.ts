@@ -551,9 +551,14 @@ describe('EdgeKintai API', () => {
   });
 
   it('closes a previous-day overnight shift without accepting a 24-hour shift', async () => {
+    // The session must be created against the real clock: createSession derives
+    // expires_at from Date.now(), but the auth check compares it with SQLite's
+    // datetime('now'), which fake timers do not touch. Setting up under a mocked
+    // past date would mint a session that is already expired once real time
+    // passes the mock plus SESSION_TTL_SECONDS.
+    const { cookie } = await setupAdmin();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-20T00:00:00Z')); // 09:00 JST
-    const { cookie } = await setupAdmin();
     const yesterday = previousDate(todayJST());
     await env.DB.prepare(
       `INSERT INTO attendance (
@@ -665,9 +670,14 @@ describe('EdgeKintai API', () => {
   });
 
   it('does not allow historical incomplete shifts to block today while enforcing yesterday overnight shift active boundaries', async () => {
+    // The session must be created against the real clock: createSession derives
+    // expires_at from Date.now(), but the auth check compares it with SQLite's
+    // datetime('now'), which fake timers do not touch. Setting up under a mocked
+    // past date would mint a session that is already expired once real time
+    // passes the mock plus SESSION_TTL_SECONDS.
+    const { cookie } = await setupAdmin();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-20T00:00:00Z')); // 09:00 JST
-    const { cookie } = await setupAdmin();
     const today = todayJST();
     const yesterday = previousDate(today);
 

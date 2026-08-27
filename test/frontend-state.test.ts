@@ -24,6 +24,22 @@ interface TestHooks {
     operation: () => Promise<unknown>,
   ) => Promise<unknown>;
   loadMonthData: (monthValue: string, force: boolean) => Promise<{ total_work_minutes: number }>;
+  renderAdminOverview: (users: unknown[]) => void;
+  formatDateTime: (value: string | Date) => string;
+  renderShiftNotice: (kind: string | null, message?: string, fixDate?: string) => void;
+  api: (path: string, options?: Record<string, unknown>) => Promise<unknown>;
+  normalizeTimestampInput: (value: unknown) => unknown;
+  getElement: (id: string) => {
+    hidden: boolean;
+    className: string;
+    textContent: string;
+    dataset: Record<string, string>;
+    children: Array<{
+      textContent: string;
+      children: Array<{ textContent: string }>;
+      classList: { contains: (name: string) => boolean };
+    }>;
+  };
   getLastObservedDate: () => string;
   setLastObservedDate: (val: string) => void;
   setUser: (user: unknown) => void;
@@ -47,22 +63,43 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
       handlePotentialDateRollover,
       withBusy,
       loadMonthData,
+      renderAdminOverview,
+      formatDateTime,
+      normalizeTimestampInput,
+      renderShiftNotice,
+      api,
       getLastObservedDate: () => lastObservedDate,
       setLastObservedDate: (val) => { lastObservedDate = val; },
       setUser: (u) => { state.user = u; },
       setApiMock: (fn) => { api = fn; },
+      getElement: (id) => document.getElementById(id),
     };
     `,
   );
 
   const createMockElement = () => {
     const children: unknown[] = [];
+    const classes = new Set<string>();
     return {
       value: '',
+      hidden: false,
+      textContent: '',
+      className: '',
+      colSpan: 0,
       dataset: {} as Record<string, string>,
       children,
+      classList: {
+        add: (name: string) => classes.add(name),
+        remove: (name: string) => classes.delete(name),
+        toggle: () => {},
+        contains: (name: string) => classes.has(name),
+      },
       append: (...items: unknown[]) => children.push(...items),
       appendChild: (item: unknown) => { children.push(item); return item; },
+      replaceChildren: (...items: unknown[]) => {
+        children.length = 0;
+        children.push(...items);
+      },
       remove: () => {},
       setAttribute: () => {},
     };
@@ -71,13 +108,18 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
     matchMedia: () => ({ matches: false }),
     setTimeout: () => 0,
   };
+  // Stable per-id elements so a test can inspect what a render function produced.
+  const elements = new Map<string, ReturnType<typeof createMockElement>>();
   const mockDoc = {
     documentElement: { dataset: {} },
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: () => null,
     createElement: () => createMockElement(),
-    getElementById: () => createMockElement(),
+    getElementById: (id: string) => {
+      if (!elements.has(id)) elements.set(id, createMockElement());
+      return elements.get(id)!;
+    },
   };
 
   const fn = new Function('window', 'document', 'navigator', 'location', 'customApi', `return ${instrumented}`);
@@ -243,6 +285,129 @@ describe('Frontend Pure State Logic', () => {
     await expect(hooks.handlePotentialDateRollover()).resolves.toBe(false);
     expect(hooks.getLastObservedDate()).toBe('2000-01-01');
     expect(callCount).toBe(2);
+  });
+
+  it('reports a dropped connection in Japanese instead of the browser default', async () => {
+    const hooks = loadFrontendHooks();
+    const originalFetch = globalThis.fetch;
+    // Chrome throws "Failed to fetch" here and Safari throws "Load failed";
+    // errorMessage() would put either straight into a toast in an otherwise
+    // fully Japanese UI.
+    globalThis.fetch = (() => Promise.reject(new TypeError('Failed to fetch'))) as typeof fetch;
+    try {
+      await expect(hooks.api('/api/auth/status')).rejects.toMatchObject({
+        name: 'ApiError',
+        status: 0,
+      });
+      await hooks.api('/api/auth/status').catch((error: Error) => {
+        expect(error.message).toContain('ネットワーク');
+        expect(error.message).not.toContain('fetch');
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('offers an inline repair action only when the punch buttons cannot help', () => {
+    const hooks = loadFrontendHooks();
+    const notice = hooks.getElement('today-active-shift-notice');
+    const message = hooks.getElement('today-active-shift-message');
+    const fix = hooks.getElement('fix-stale-record-button');
+
+    // A stale open shift disables both 出勤 and 退勤, so the notice has to carry
+    // the only way forward.
+    hooks.renderShiftNotice('warning', '前日の未退勤記録があります。', '2026-08-26');
+    expect(notice.hidden).toBe(false);
+    expect(notice.className).toBe('notice notice-warning');
+    expect(message.textContent).toBe('前日の未退勤記録があります。');
+    expect(fix.hidden).toBe(false);
+    expect(fix.dataset.date).toBe('2026-08-26');
+
+    // A previous-day shift that is still active can be closed with 退勤, so the
+    // notice stays purely informational.
+    hooks.renderShiftNotice('info', '前日から勤務中です。');
+    expect(notice.className).toBe('notice notice-info');
+    expect(fix.hidden).toBe(true);
+    expect(fix.dataset.date).toBe('');
+
+    // A malformed date must not leave a button that opens nothing.
+    hooks.renderShiftNotice('warning', 'x', 'not-a-date');
+    expect(fix.hidden).toBe(true);
+    expect(fix.dataset.date).toBe('');
+
+    hooks.renderShiftNotice(null);
+    expect(notice.hidden).toBe(true);
+    expect(notice.className).toBe('notice');
+    expect(message.textContent).toBe('');
+    expect(fix.hidden).toBe(true);
+  });
+
+  it('reads a bare SQLite timestamp as UTC, matching the server', () => {
+    const { formatDateTime, normalizeTimestampInput } = loadFrontendHooks();
+
+    // Asserted on the normalized string rather than the rendered output: this
+    // suite runs in workerd, whose local zone is UTC, so a rendered comparison
+    // would pass even without the zone suffix and prove nothing.
+    expect(normalizeTimestampInput('2026-08-25 03:00:00')).toBe('2026-08-25T03:00:00Z');
+
+    // An ISO string from a fresh sync already carries its zone; leave it alone.
+    expect(normalizeTimestampInput('2026-08-25T03:00:00.000Z')).toBe('2026-08-25T03:00:00.000Z');
+
+    // formatDateTime(new Date()) is also a valid call and must pass through.
+    const now = new Date();
+    expect(normalizeTimestampInput(now)).toBe(now);
+
+    // Both server shapes are the same instant and must render identically.
+    expect(formatDateTime('2026-08-25 03:00:00')).toBe(formatDateTime('2026-08-25T03:00:00.000Z'));
+    expect(formatDateTime('not a timestamp')).toBe('');
+  });
+
+  it('surfaces absent, scheduled and incomplete days in the admin overview', () => {
+    const hooks = loadFrontendHooks();
+    hooks.renderAdminOverview([
+      {
+        display_name: '山田 太郎',
+        summary: {
+          office_days: 10,
+          remote_days: 5,
+          paid_leave_days: 1,
+          absent_days: 2,
+          scheduled_work_days: 20,
+          incomplete_days: 3,
+          total_work_minutes: 600,
+          total_transport_fee: 4400,
+        },
+      },
+      {
+        display_name: '鈴木 花子',
+        summary: {
+          office_days: 20,
+          remote_days: 0,
+          paid_leave_days: 0,
+          absent_days: 0,
+          scheduled_work_days: 20,
+          incomplete_days: 0,
+          total_work_minutes: 9600,
+          total_transport_fee: 8800,
+        },
+      },
+    ]);
+
+    const rows = hooks.getElement('admin-overview-body').children;
+    expect(rows).toHaveLength(2);
+
+    // The server already computes these; the table used to discard them.
+    const [withGaps, complete] = rows;
+    expect(withGaps.children).toHaveLength(9);
+    expect(withGaps.children[4].textContent).toBe('2日'); // 欠勤
+    expect(withGaps.children[5].textContent).toBe('20日'); // 所定
+    expect(withGaps.children[6].textContent).toBe('3件'); // 未完了
+    expect(withGaps.children[7].textContent).toBe('10:00'); // 実働
+    expect(withGaps.classList.contains('is-incomplete-row')).toBe(true);
+
+    // A month with nothing outstanding stays visually quiet.
+    expect(complete.children[6].textContent).toBe('—');
+    expect(complete.classList.contains('is-incomplete-row')).toBe(false);
   });
 
   it('still performs the action when the submit event carries no submitter', async () => {

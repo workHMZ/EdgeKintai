@@ -41,6 +41,7 @@
     calendarSummary: null,
     summary: null,
     editorRecord: null,
+    adminEditUser: null,
     clockTimer: null,
   };
 
@@ -186,6 +187,10 @@
     byId('edit-today-button').addEventListener('click', () => {
       void openRecordEditor(todayIso());
     });
+    byId('fix-stale-record-button')?.addEventListener('click', (event) => {
+      const date = validDate(event.currentTarget.dataset.date);
+      if (date) void openRecordEditor(date);
+    });
 
     byId('apply-default-times-button')?.addEventListener('click', handleApplyDefaultTimes);
 
@@ -228,6 +233,14 @@
     byId('delete-record-button').addEventListener('click', handleRecordDelete);
 
     byId('admin-add-user-form').addEventListener('submit', handleAdminAddUser);
+    byId('close-admin-user-dialog').addEventListener('click', closeAdminUserDialog);
+    byId('cancel-admin-user-button').addEventListener('click', closeAdminUserDialog);
+    byId('admin-user-dialog').addEventListener('cancel', (event) => {
+      event.preventDefault();
+      closeAdminUserDialog();
+    });
+    byId('admin-user-form').addEventListener('submit', handleAdminUserSave);
+    byId('admin-reset-password-button').addEventListener('click', () => void handleAdminPasswordReset());
     document.addEventListener('click', handleTimeStepper);
     window.addEventListener('keydown', handleKeyboardShortcuts);
   }
@@ -237,11 +250,13 @@
     const tag = document.activeElement?.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 
-    const dialog = byId('record-dialog');
-    if (dialog && dialog.open) {
+    // Any modal swallows the navigation digits, not just the record editor.
+    const dialog = document.querySelector('dialog[open]');
+    if (dialog) {
       if (event.key === 'Escape') {
         event.preventDefault();
-        closeRecordDialog();
+        if (dialog.id === 'admin-user-dialog') closeAdminUserDialog();
+        else closeRecordDialog();
       }
       return;
     }
@@ -658,23 +673,20 @@
     let status = 'empty';
     let label = '未定';
 
-    const noticeEl = byId('today-active-shift-notice');
-    if (noticeEl) {
-      noticeEl.hidden = true;
-      noticeEl.textContent = '';
-      noticeEl.className = 'notice';
-    }
+    renderShiftNotice(null);
 
     if (staleRecord) {
       status = 'incomplete';
       label = '未退勤あり';
       byId('clock-out-button').disabled = true;
       byId('clock-in-button').disabled = true;
-      if (noticeEl) {
-        noticeEl.hidden = false;
-        noticeEl.className = 'notice notice-warning';
-        noticeEl.textContent = `前日（${formatJapaneseDate(staleRecord.work_date)}）${staleRecord.clock_in} の未退勤記録があります。カレンダーから記録を修正してください。`;
-      }
+      // Both punch buttons are disabled here, so the notice has to carry the
+      // only way forward instead of sending the user off to find the day.
+      renderShiftNotice(
+        'warning',
+        `前日（${formatJapaneseDate(staleRecord.work_date)}）${staleRecord.clock_in} の未退勤記録があります。`,
+        staleRecord.work_date,
+      );
     } else if (activeRecord) {
       if (activeRecord.work_date === today.date) {
         status = 'working';
@@ -686,11 +698,11 @@
         label = '勤務中（前日）';
         byId('clock-out-button').disabled = false;
         byId('clock-in-button').disabled = true;
-        if (noticeEl) {
-          noticeEl.hidden = false;
-          noticeEl.className = 'notice notice-info';
-          noticeEl.textContent = `前日（${formatJapaneseDate(activeRecord.work_date)}）${activeRecord.clock_in} から勤務中です。退勤すると前日の勤務記録に保存されます。`;
-        }
+        // 退勤 still works, so this one is informational only.
+        renderShiftNotice(
+          'info',
+          `前日（${formatJapaneseDate(activeRecord.work_date)}）${activeRecord.clock_in} から勤務中です。退勤すると前日の勤務記録に保存されます。`,
+        );
       }
     } else {
       byId('clock-out-button').disabled = true;
@@ -726,6 +738,33 @@
     );
     if (!record?.persisted) byId('clock-work-type').value = today.defaults.work_type;
     updateClockForm();
+  }
+
+  /**
+   * Single owner of the punch-card notice. `kind` null clears it; `fixDate`
+   * reveals the inline repair action for a day the user can no longer punch.
+   */
+  function renderShiftNotice(kind, message, fixDate) {
+    const noticeEl = byId('today-active-shift-notice');
+    const messageEl = byId('today-active-shift-message');
+    const fixButton = byId('fix-stale-record-button');
+    if (!noticeEl || !messageEl || !fixButton) return;
+
+    if (!kind) {
+      noticeEl.hidden = true;
+      noticeEl.className = 'notice';
+      messageEl.textContent = '';
+      fixButton.hidden = true;
+      fixButton.dataset.date = '';
+      return;
+    }
+
+    noticeEl.hidden = false;
+    noticeEl.className = `notice notice-${kind}`;
+    messageEl.textContent = message;
+    const repairable = Boolean(validDate(fixDate));
+    fixButton.hidden = !repairable;
+    fixButton.dataset.date = repairable ? fixDate : '';
   }
 
   function renderTodayWorkTime(record) {
@@ -1564,6 +1603,13 @@
         createElement('td', { text: user.is_admin ? '管理者' : '一般' }),
       );
       const actionCell = document.createElement('td');
+      const actions = createElement('div', { className: 'button-row table-action-row' });
+      const editButton = createElement('button', {
+        className: 'button',
+        type: 'button',
+        text: '編集',
+      });
+      editButton.addEventListener('click', () => openAdminUserDialog(user));
       const button = createElement('button', {
         className: 'button button-danger',
         type: 'button',
@@ -1571,10 +1617,144 @@
       });
       button.disabled = user.id === state.user.id;
       button.addEventListener('click', () => void deleteAdminUser(user, button));
-      actionCell.append(button);
+      actions.append(editButton, button);
+      actionCell.append(actions);
       row.append(actionCell);
       body.append(row);
     }
+  }
+
+  function openAdminUserDialog(user) {
+    state.adminEditUser = user;
+    byId('admin-user-context').textContent =
+      `${user.display_name || user.username}（ログイン名: ${user.username}）`;
+    byId('admin-edit-name').value = user.display_name;
+    byId('admin-edit-work-type').value = user.default_work_type;
+    byId('admin-edit-clock-in').value = user.default_clock_in || '';
+    byId('admin-edit-clock-out').value = user.default_clock_out || '';
+    byId('admin-edit-break').value = String(user.default_break_minutes);
+    byId('admin-edit-one-way-fare').value = user.default_one_way_fare === null
+      ? ''
+      : String(user.default_one_way_fare);
+    byId('admin-edit-trip-type').value = user.default_trip_type;
+    byId('admin-edit-transport-mode').value = user.default_transport_mode;
+    byId('admin-edit-transport-origin').value = user.default_transport_origin;
+    byId('admin-edit-transport-destination').value = user.default_transport_destination;
+    byId('admin-edit-password').value = '';
+
+    // Editing yourself is allowed, but not the two operations that would lock
+    // you out or bypass the re-authentication the settings page enforces.
+    const editingSelf = user.id === state.user?.id;
+    const adminToggle = byId('admin-edit-is-admin');
+    adminToggle.checked = Boolean(user.is_admin);
+    adminToggle.disabled = editingSelf;
+    byId('admin-edit-is-admin-help').hidden = !editingSelf;
+
+    const resetButton = byId('admin-reset-password-button');
+    const passwordInput = byId('admin-edit-password');
+    resetButton.disabled = editingSelf;
+    passwordInput.disabled = editingSelf;
+    byId('admin-reset-password-help').textContent = editingSelf
+      ? '自分のパスワードは「設定」から現在のパスワードを確認したうえで変更してください。'
+      : 'リセットすると対象ユーザーの全セッションが無効になります。';
+
+    byId('admin-user-dialog').showModal();
+  }
+
+  function closeAdminUserDialog() {
+    const dialog = byId('admin-user-dialog');
+    dialog?.querySelector('.dialog-toast-region')?.replaceChildren();
+    if (dialog?.open) dialog.close();
+    byId('admin-edit-password').value = '';
+    state.adminEditUser = null;
+  }
+
+  async function handleAdminUserSave(event) {
+    event.preventDefault();
+    const user = state.adminEditUser;
+    if (!user) return;
+
+    const displayName = byId('admin-edit-name').value.trim();
+    if (!displayName) {
+      toast('氏名を入力してください。', 'error');
+      return;
+    }
+
+    let breakMinutes;
+    let oneWayFare;
+    try {
+      breakMinutes = readIntegerInput(byId('admin-edit-break'), '既定の休憩時間', 0, 480);
+      oneWayFare = readIntegerInput(byId('admin-edit-one-way-fare'), '既定の片道運賃', 0, 100000, {
+        allowEmpty: true,
+        emptyValue: null,
+      });
+    } catch (err) {
+      if (err instanceof InputValidationError) {
+        toast(err.message, 'error');
+        return;
+      }
+      throw err;
+    }
+
+    const body = {
+      display_name: displayName,
+      default_work_type: workingType(byId('admin-edit-work-type').value) || 'office',
+      default_clock_in: validTime(byId('admin-edit-clock-in').value) || null,
+      default_clock_out: validTime(byId('admin-edit-clock-out').value) || null,
+      default_break_minutes: breakMinutes,
+      default_one_way_fare: oneWayFare,
+      default_trip_type: normalizeTripType(byId('admin-edit-trip-type').value) || 'round_trip',
+      default_transport_mode: normalizeTransportMode(byId('admin-edit-transport-mode').value) || 'rail',
+      default_transport_origin: commuteLocationInput(byId('admin-edit-transport-origin')),
+      default_transport_destination: commuteLocationInput(byId('admin-edit-transport-destination')),
+    };
+    if (!byId('admin-edit-is-admin').disabled) {
+      body.is_admin = byId('admin-edit-is-admin').checked ? 1 : 0;
+    }
+
+    await withBusy(event.submitter, '保存中…', async () => {
+      try {
+        const response = await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
+        const updated = normalizeUser(response.user || response.data?.user || response);
+        closeAdminUserDialog();
+        // Editing your own row changes the defaults the punch form is built from.
+        if (updated.id && updated.id === state.user?.id) {
+          state.user = updated;
+          renderUserIdentity();
+          applyUserDefaults();
+          state.monthCache.clear();
+        }
+        await Promise.all([loadAdminUsers(), loadAdminOverview()]);
+        toast('ユーザー情報を保存しました。', 'success');
+      } catch (error) {
+        handleAuthenticatedError(error, 'ユーザー情報を保存できませんでした。');
+      }
+    });
+  }
+
+  async function handleAdminPasswordReset() {
+    const user = state.adminEditUser;
+    if (!user) return;
+    const password = byId('admin-edit-password').value;
+    if (password.length < 12 || password.length > 128) {
+      toast('新しいパスワードは12〜128文字にしてください。', 'error');
+      return;
+    }
+    const label = user.display_name || user.username;
+    if (!window.confirm(`${label} のパスワードをリセットしますか？\n対象ユーザーはログアウトされ、再ログインが必要になります。`)) return;
+
+    await withBusy(byId('admin-reset-password-button'), 'リセット中…', async () => {
+      try {
+        await api(`/api/admin/users/${user.id}/password`, {
+          method: 'POST',
+          body: { new_password: password },
+        });
+        byId('admin-edit-password').value = '';
+        toast(`${label} のパスワードをリセットしました。`, 'success');
+      } catch (error) {
+        handleAuthenticatedError(error, 'パスワードをリセットできませんでした。');
+      }
+    });
   }
 
   async function deleteAdminUser(user, button) {
@@ -1644,11 +1824,18 @@
     for (const item of users) {
       const summary = unwrap(item.summary || {});
       const row = document.createElement('tr');
+      // Reuses the same emphasis the personal summary table already applies to
+      // a day whose punches are missing.
+      const incompleteDays = numberOrZero(summary.incomplete_days);
+      if (incompleteDays > 0) row.classList.add('is-incomplete-row');
       [
         safeString(item.display_name || item.username, '（名称なし）'),
         `${numberOrZero(summary.office_days)}日`,
         `${numberOrZero(summary.remote_days)}日`,
         `${numberOrZero(summary.paid_leave_days)}日`,
+        `${numberOrZero(summary.absent_days)}日`,
+        `${numberOrZero(summary.scheduled_work_days)}日`,
+        incompleteDays > 0 ? `${incompleteDays}件` : '—',
         formatMinutes(numberOrZero(summary.total_work_minutes)),
         money(numberOrZero(summary.total_transport_fee)),
       ].forEach((value) => row.append(createElement('td', { text: value })));
@@ -1657,7 +1844,7 @@
     if (!users.length) {
       const row = document.createElement('tr');
       const cell = createElement('td', { className: 'empty-table-cell', text: 'ユーザーがいません。' });
-      cell.colSpan = 6;
+      cell.colSpan = 9;
       row.append(cell);
       body.append(row);
     }
@@ -1831,13 +2018,27 @@
       headers.set('Content-Type', 'application/json');
       body = JSON.stringify(config.body);
     }
-    const response = await fetch(path, {
-      method: config.method || 'GET',
-      credentials: 'include',
-      cache: 'no-store',
-      headers,
-      body,
-    });
+    let response;
+    try {
+      response = await fetch(path, {
+        method: config.method || 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+        headers,
+        body,
+      });
+    } catch {
+      // fetch() only rejects when the request never completed at all: offline,
+      // DNS, TLS, or the server going away. The browser's own message is
+      // untranslated and differs per engine ("Failed to fetch" in Chrome,
+      // "Load failed" in Safari), and errorMessage() would surface it verbatim.
+      // Status 0 keeps it clear of the 401 re-authentication path.
+      throw new ApiError(
+        'ネットワークに接続できません。通信状況を確認してからもう一度お試しください。',
+        0,
+        null,
+      );
+    }
     const contentType = response.headers.get('content-type') || '';
     let data = null;
     if (response.status !== 204) {
@@ -2291,8 +2492,19 @@
 
   let _dtfDateTime = null;
   let _dtfDateTimeTz = null;
+  /**
+   * SQLite datetime('now') is UTC but carries no zone suffix, and both V8 and
+   * JavaScriptCore read "YYYY-MM-DD HH:MM:SS" as local time. Stamping the zone
+   * on keeps the holiday sync time from rendering 9 hours early in JST.
+   * Mirrors the server's parseDatabaseTimestamp.
+   */
+  function normalizeTimestampInput(value) {
+    if (typeof value !== 'string' || value.includes('T')) return value;
+    return `${value.replace(' ', 'T')}Z`;
+  }
+
   function formatDateTime(value) {
-    const date = new Date(value);
+    const date = new Date(normalizeTimestampInput(value));
     if (Number.isNaN(date.getTime())) return '';
     const tz = state.config.timezone || 'Asia/Tokyo';
     if (!_dtfDateTime || _dtfDateTimeTz !== tz) {

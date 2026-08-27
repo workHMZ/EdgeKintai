@@ -435,11 +435,25 @@ textarea:focus {
   transform: scale(0.92);
 }
 
+/*
+ * Sits between .panel-heading and the punch actions. .panel is a plain block
+ * and .stack.compact zeroes its own top margin, so without the bottom margin
+ * here the notice would touch the 出勤 / 退勤 buttons.
+ */
 .notice {
+  display: grid;
+  gap: 0.55rem;
+  justify-items: start;
+  margin-bottom: 0.9rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-small);
   padding: 0.8rem 0.9rem;
   font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.notice p {
+  margin: 0;
 }
 
 .notice-warning {
@@ -565,6 +579,21 @@ textarea:focus {
   gap: 0.45rem;
 }
 
+/*
+ * Actions inside a narrow table cell. Wrapping here would stack the buttons and
+ * double every row's height on a phone, so keep them on one line and let the
+ * surrounding .table-scroll absorb the width instead.
+ */
+.table-action-row {
+  flex-wrap: nowrap;
+}
+
+.table-action-row .button {
+  min-height: 2.1rem;
+  padding: 0.32rem 0.7rem;
+  font-size: 0.82rem;
+}
+
 .inline-options label {
   display: flex;
   align-items: center;
@@ -611,6 +640,7 @@ textarea:focus {
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 91%, transparent);
   padding: 0.8rem clamp(0.85rem, 3vw, 1.5rem);
+  -webkit-backdrop-filter: blur(16px);
   backdrop-filter: blur(16px);
 }
 
@@ -702,6 +732,7 @@ textarea:focus {
 
 .main-content {
   min-height: calc(100vh - 8rem);
+  min-height: calc(100dvh - 8rem);
   padding: clamp(1rem, 3vw, 1.75rem);
 }
 
@@ -1449,6 +1480,7 @@ tbody tr.is-incomplete-row:hover td {
 .record-dialog {
   width: min(calc(100% - 1.5rem), 680px);
   max-height: calc(100vh - 1.5rem);
+  max-height: calc(100dvh - 1.5rem);
   overflow-y: auto;
   border: 1px solid var(--border-strong);
   border-radius: calc(var(--radius) + 2px);
@@ -1460,6 +1492,7 @@ tbody tr.is-incomplete-row:hover td {
 
 .record-dialog::backdrop {
   background: rgb(3 7 10 / 72%);
+  -webkit-backdrop-filter: blur(3px);
   backdrop-filter: blur(3px);
 }
 
@@ -1483,6 +1516,15 @@ tbody tr.is-incomplete-row:hover td {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  margin-top: 0.25rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Secondary block inside a dialog, separated the same way as .dialog-actions. */
+.dialog-section {
+  display: grid;
+  gap: 0.45rem;
   margin-top: 0.25rem;
   padding-top: 0.9rem;
   border-top: 1px solid var(--border);

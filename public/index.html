@@ -137,7 +137,10 @@
                   <h2>打刻</h2>
                 </div>
               </div>
-              <div id="today-active-shift-notice" class="notice" hidden></div>
+              <div id="today-active-shift-notice" class="notice" hidden>
+                <p id="today-active-shift-message"></p>
+                <button id="fix-stale-record-button" type="button" class="text-button-link" hidden>記録を修正する</button>
+              </div>
               <form id="clock-in-form" class="stack compact" novalidate>
                 <div class="button-row clock-action-row">
                   <button id="clock-in-button" class="button button-primary button-action" type="submit">出勤</button>
@@ -473,7 +476,7 @@
             <div class="panel-heading"><h2>月次勤務概要</h2></div>
             <div class="table-scroll">
               <table>
-                <thead><tr><th scope="col">氏名</th><th scope="col">出社</th><th scope="col">在宅</th><th scope="col">有給</th><th scope="col">実働</th><th scope="col">交通費</th></tr></thead>
+                <thead><tr><th scope="col">氏名</th><th scope="col">出社</th><th scope="col">在宅</th><th scope="col">有給</th><th scope="col">欠勤</th><th scope="col">所定</th><th scope="col">未完了</th><th scope="col">実働</th><th scope="col">交通費</th></tr></thead>
                 <tbody id="admin-overview-body"></tbody>
               </table>
             </div>
@@ -583,6 +586,121 @@
           <button id="delete-record-button" class="button button-danger" type="button">記録を削除</button>
           <div class="button-row">
             <button id="cancel-record-button" class="button" type="button">キャンセル</button>
+            <button class="button button-primary" type="submit">保存</button>
+          </div>
+        </div>
+        <div class="toast-region dialog-toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+      </form>
+    </dialog>
+
+    <dialog id="admin-user-dialog" class="record-dialog" aria-labelledby="admin-user-dialog-title">
+      <form id="admin-user-form" method="dialog" novalidate>
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">User editor</p>
+            <h2 id="admin-user-dialog-title">ユーザーを編集</h2>
+          </div>
+          <button id="close-admin-user-dialog" class="icon-button" type="button" aria-label="閉じる">×</button>
+        </div>
+        <div id="admin-user-context" class="date-context"></div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="admin-edit-name">氏名（Excel表示名）</label>
+            <input id="admin-edit-name" type="text" maxlength="80" required>
+          </div>
+          <div class="field">
+            <label for="admin-edit-work-type">既定の勤務区分</label>
+            <select id="admin-edit-work-type">
+              <option value="office">出社</option>
+              <option value="remote">在宅</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="inline-options">
+          <label><input id="admin-edit-is-admin" type="checkbox"> 管理者権限を付与</label>
+        </div>
+        <small id="admin-edit-is-admin-help" class="muted" hidden>自分自身の権限は変更できません。</small>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="admin-edit-clock-in">既定の出勤時刻</label>
+            <div class="time-stepper-wrapper">
+              <input id="admin-edit-clock-in" type="time" step="60" class="time-input">
+              <div class="time-stepper-btns">
+                <button type="button" class="stepper-btn stepper-up" aria-label="15分進める" data-time-target="admin-edit-clock-in" data-step="15">▲</button>
+                <button type="button" class="stepper-btn stepper-down" aria-label="15分戻す" data-time-target="admin-edit-clock-in" data-step="-15">▼</button>
+              </div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="admin-edit-clock-out">既定の退勤時刻</label>
+            <div class="time-stepper-wrapper">
+              <input id="admin-edit-clock-out" type="time" step="60" class="time-input">
+              <div class="time-stepper-btns">
+                <button type="button" class="stepper-btn stepper-up" aria-label="15分進める" data-time-target="admin-edit-clock-out" data-step="15">▲</button>
+                <button type="button" class="stepper-btn stepper-down" aria-label="15分戻す" data-time-target="admin-edit-clock-out" data-step="-15">▼</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="admin-edit-break">既定の休憩時間（分）</label>
+            <input id="admin-edit-break" type="number" inputmode="numeric" min="0" max="480" step="1">
+          </div>
+          <div class="field">
+            <label for="admin-edit-one-way-fare">既定の片道運賃（円）</label>
+            <input id="admin-edit-one-way-fare" type="number" inputmode="numeric" min="0" max="100000" step="1">
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="admin-edit-transport-mode">既定の交通手段</label>
+            <select id="admin-edit-transport-mode">
+              <option value="rail">鉄道</option>
+              <option value="bus">バス</option>
+              <option value="taxi">タクシー</option>
+              <option value="other">その他</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="admin-edit-trip-type">既定の交通区分</label>
+            <select id="admin-edit-trip-type">
+              <option value="round_trip">往復</option>
+              <option value="one_way">片道</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label for="admin-edit-transport-origin">出発地（駅・停留所など）</label>
+            <input id="admin-edit-transport-origin" type="text" maxlength="120">
+          </div>
+          <div class="field">
+            <label for="admin-edit-transport-destination">到着地（駅・停留所など）</label>
+            <input id="admin-edit-transport-destination" type="text" maxlength="120">
+          </div>
+        </div>
+
+        <div class="dialog-section">
+          <div class="field">
+            <div class="field-label-row">
+              <label for="admin-edit-password">パスワードをリセット</label>
+              <button id="admin-reset-password-button" type="button" class="text-button-link">リセットを実行</button>
+            </div>
+            <input id="admin-edit-password" type="password" minlength="12" maxlength="128" autocomplete="new-password" placeholder="新しいパスワード（12〜128文字）">
+          </div>
+          <small id="admin-reset-password-help" class="muted">リセットすると対象ユーザーの全セッションが無効になります。</small>
+        </div>
+
+        <div class="dialog-actions">
+          <div class="button-row">
+            <button id="cancel-admin-user-button" class="button" type="button">キャンセル</button>
             <button class="button button-primary" type="submit">保存</button>
           </div>
         </div>
