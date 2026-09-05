@@ -60,17 +60,6 @@ export function getUserCommuteDefaults(
   };
 }
 
-export function getUserTimeDefaults(
-  env: CloudflareBindings,
-  user: Pick<User, 'default_clock_in' | 'default_clock_out'>,
-): { clock_in: string | null; clock_out: string | null } {
-  const config = getPublicConfig(env);
-  return {
-    clock_in: user.default_clock_in ?? config.default_clock_in,
-    clock_out: user.default_clock_out ?? config.default_clock_out,
-  };
-}
-
 export function getUserAttendanceDefaults(
   env: CloudflareBindings,
   user: Pick<

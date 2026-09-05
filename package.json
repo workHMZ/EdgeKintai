@@ -1,6 +1,6 @@
 {
   "name": "edge-kintai",
-  "version": "2.5.2",
+  "version": "2.6.0",
   "description": "Cloudflare-native attendance tracker for Japan",
   "private": true,
   "license": "MIT",
@@ -23,7 +23,7 @@
     "cf-typegen": "wrangler types worker-configuration.d.ts --env-interface CloudflareBindings --include-runtime=false --strict-vars=false --env-file .dev.vars.example",
     "cf-typegen:check": "npm run cf-typegen -- --check",
     "typecheck": "tsc --noEmit",
-    "lint:frontend": "eslint public/app.js",
+    "lint:frontend": "eslint public/app.js public/excel.js",
     "test:excel": "node scripts/test-excel.mjs",
     "test:ui": "node scripts/test-ui-contract.mjs",
     "test": "vitest run",
@@ -35,6 +35,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.20.3",
     "@cloudflare/workers-types": "^5.20260808.1",
+    "@eslint/js": "^10.0.1",
     "eslint": "^10.8.1",
     "globals": "^17.11.0",
     "typescript": "^7.0.2",

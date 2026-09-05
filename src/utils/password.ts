@@ -1,4 +1,21 @@
-const HASH_ITERATIONS = 100_000;
+/**
+ * Bounded by the Workers Free CPU budget of 10 ms per invocation, which every
+ * `/api/*` request shares. PBKDF2 is the dominant cost on the login and
+ * password-change paths: measured inside workerd, 100_000 iterations cost
+ * ~5.8 ms on an Apple Silicon laptop, and Cloudflare's edge cores are slower
+ * still, which puts a single login over budget. 50_000 halves that and leaves
+ * headroom for the D1 round trips in the same request. It is also the floor
+ * `parseStoredHash` accepts, so it stays inside the range this format was
+ * designed for.
+ *
+ * Changing this number never invalidates an existing password: the iteration
+ * count is stored inside each hash (`pbkdf2_sha256$<iterations>$<salt>$<hash>`)
+ * and `verifyPassword` derives with the *stored* count, not this constant. Only
+ * newly written hashes use the value below, so an already-deployed database
+ * keeps working untouched. Raise it again if the Worker moves to a paid plan,
+ * where the per-invocation CPU limit is configurable.
+ */
+const HASH_ITERATIONS = 50_000;
 const HASH_ALGORITHM = 'SHA-256';
 const HASH_PREFIX = 'pbkdf2_sha256';
 

@@ -38,13 +38,6 @@ export function timeToMinutes(time: string): number {
   return hours * 60 + minutes;
 }
 
-export function minutesToHHMM(minutes: number): string {
-  const safeMinutes = Math.max(0, Math.trunc(minutes));
-  const hours = Math.floor(safeMinutes / 60);
-  const remainder = String(safeMinutes % 60).padStart(2, '0');
-  return `${hours}:${remainder}`;
-}
-
 export const MAX_SHIFT_MINUTES = 18 * 60;
 
 /**
@@ -102,10 +95,6 @@ export function previousDate(date: string): string {
   const value = new Date(Date.UTC(year, month - 1, day));
   value.setUTCDate(value.getUTCDate() - 1);
   return formatDate(value);
-}
-
-export function dayOfWeekJa(day: number): string {
-  return ['日', '月', '火', '水', '木', '金', '土'][day] ?? '';
 }
 
 export function daysInMonth(year: number, month: number): number {

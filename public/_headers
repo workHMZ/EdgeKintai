@@ -1,5 +1,9 @@
+# Cloudflare *appends* to a header that an earlier matching rule already set,
+# it does not replace it. A `Cache-Control` on this catch-all would therefore be
+# merged into every later rule as `no-cache, public, max-age=…`, and `no-cache`
+# wins in the browser — silently cancelling the caching below. So the catch-all
+# carries security headers only, and caching is stated per path.
 /*
-  Cache-Control: no-cache
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
@@ -8,3 +12,43 @@
   Strict-Transport-Security: max-age=31536000; includeSubDomains
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
+
+# The shell and both unhashed bundles keep their filenames across releases, so
+# they must revalidate or a deploy would never reach a returning browser.
+# Workers Static Assets answers with a 304 from its own ETag, so revalidating
+# costs a round trip and not the payload.
+/
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/app.js
+  Cache-Control: no-cache
+
+/excel.js
+  Cache-Control: no-cache
+
+/styles.css
+  Cache-Control: no-cache
+
+# Icons are the largest static payload here (~305 KB together, of which
+# icon-512.png alone is 235 KB) and the least likely bytes to ever change.
+# 30 days rather than a year because the filenames carry no content hash: a
+# replaced icon still heals on its own within a month.
+/icon-192.png
+  Cache-Control: public, max-age=2592000
+
+/icon-512.png
+  Cache-Control: public, max-age=2592000
+
+/apple-touch-icon.png
+  Cache-Control: public, max-age=2592000
+
+/favicon.svg
+  Cache-Control: public, max-age=2592000
+
+# The manifest changes more often than the icons it points at, and a stale one
+# affects install metadata, so it gets a day rather than a month.
+/manifest.webmanifest
+  Cache-Control: public, max-age=86400

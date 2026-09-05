@@ -75,9 +75,18 @@
     byId('admin-month').value = state.adminMonth;
 
     try {
+      // /api/config and /api/auth/status do not depend on each other, so both
+      // requests go out together instead of costing two serial round trips
+      // before anything can render. They are still *consumed* in order, because
+      // normalizeUser() reads the fetched config to fill in a user's missing
+      // defaults.
+      const statusRequest = api('/api/auth/status');
+      // Keeps a rejection that lands while loadConfig() is still in flight from
+      // surfacing as an unhandled rejection; loadAuthStatus re-observes it.
+      statusRequest.catch(() => {});
       await loadConfig();
       cacheDOM();
-      const status = await loadAuthStatus();
+      const status = await loadAuthStatus(statusRequest);
       if (status.authenticated && status.user) {
         await enterApplication(status.user);
       } else {
@@ -298,45 +307,25 @@
   }
 
   async function loadConfig() {
-    try {
-      const raw = await api('/api/config');
-      const source = unwrap(raw);
-      state.config = {
-        timezone: safeString(source.timezone, DEFAULT_CONFIG.timezone),
-        default_break_minutes: boundedInteger(source.default_break_minutes, DEFAULT_CONFIG.default_break_minutes, 0, 480),
-        default_one_way_fare: boundedInteger(source.default_one_way_fare, DEFAULT_CONFIG.default_one_way_fare, 0, 100000),
-        default_trip_type: normalizeTripType(source.default_trip_type) || DEFAULT_CONFIG.default_trip_type,
-        default_clock_in: validTime(source.default_clock_in) || DEFAULT_CONFIG.default_clock_in,
-        default_clock_out: validTime(source.default_clock_out) || DEFAULT_CONFIG.default_clock_out,
-        overtime_threshold_hours: boundedInteger(source.overtime_threshold_hours, DEFAULT_CONFIG.overtime_threshold_hours, 0, 744),
-      };
-    } catch (error) {
-      if (!(error instanceof ApiError) || error.status !== 404) throw error;
-      state.config = { ...DEFAULT_CONFIG };
-    }
+    const source = unwrap(await api('/api/config'));
+    state.config = {
+      timezone: safeString(source.timezone, DEFAULT_CONFIG.timezone),
+      default_break_minutes: boundedInteger(source.default_break_minutes, DEFAULT_CONFIG.default_break_minutes, 0, 480),
+      default_one_way_fare: boundedInteger(source.default_one_way_fare, DEFAULT_CONFIG.default_one_way_fare, 0, 100000),
+      default_trip_type: normalizeTripType(source.default_trip_type) || DEFAULT_CONFIG.default_trip_type,
+      default_clock_in: validTime(source.default_clock_in) || DEFAULT_CONFIG.default_clock_in,
+      default_clock_out: validTime(source.default_clock_out) || DEFAULT_CONFIG.default_clock_out,
+      overtime_threshold_hours: boundedInteger(source.overtime_threshold_hours, DEFAULT_CONFIG.overtime_threshold_hours, 0, 744),
+    };
   }
 
-  async function loadAuthStatus() {
-    try {
-      const raw = await api('/api/auth/status');
-      const status = unwrap(raw);
-      return {
-        setup_required: Boolean(status.setup_required),
-        authenticated: Boolean(status.authenticated),
-        user: status.user ? normalizeUser(status.user) : null,
-      };
-    } catch (error) {
-      if (!(error instanceof ApiError) || error.status !== 404) throw error;
-      try {
-        const user = await api('/api/auth/me');
-        return { setup_required: false, authenticated: true, user: normalizeUser(user) };
-      } catch (meError) {
-        if (meError instanceof ApiError && meError.status === 401) {
-          return { setup_required: false, authenticated: false, user: null };
-        }
-        throw meError;
-      }
-    }
+  async function loadAuthStatus(pendingRequest) {
+    const status = unwrap(await (pendingRequest || api('/api/auth/status')));
+    return {
+      setup_required: Boolean(status.setup_required),
+      authenticated: Boolean(status.authenticated),
+      user: status.user ? normalizeUser(status.user) : null,
+    };
   }
 
   function showAuthentication(setupRequired) {
@@ -369,7 +358,7 @@
           body: { username, password },
         });
         byId('login-password').value = '';
-        await enterApplication(response.user || response.data?.user || response);
+        await enterApplication(response.user);
         toast('ログインしました。', 'success');
       } catch (error) {
         toast(errorMessage(error, 'ログインできませんでした。'), 'error');
@@ -415,7 +404,7 @@
         byId('setup-token').value = '';
         byId('setup-password').value = '';
         byId('setup-password-confirm').value = '';
-        await enterApplication(response.user || response.data?.user || response);
+        await enterApplication(response.user);
         toast('初期セットアップが完了しました。', 'success');
       } catch (error) {
         toast(errorMessage(error, '初期セットアップに失敗しました。'), 'error');
@@ -992,18 +981,7 @@
       grid.append(button);
     }
 
-    const holiday = summary.holiday_data || {};
-    const sourceLabels = {
-      cache: '保存済みの祝日データ',
-      'official-csv': '内閣府の祝日CSV',
-      'rule-based': '通用ルールによる推算（特例の祝日移動等は反映されません）',
-      unavailable: '祝日データを取得できませんでした',
-    };
-    const note = byId('calendar-holiday-source-note');
-    if (note) {
-      note.textContent = `祝日情報：${sourceLabels[holiday.source] || '取得元不明'}${holiday.synced_at ? `（同期：${formatDateTime(holiday.synced_at)}）` : ''}`;
-      note.dataset.incomplete = holiday.complete === false ? 'true' : 'false';
-    }
+    renderHolidaySourceNote(byId('calendar-holiday-source-note'), summary.holiday_data);
   }
 
   let summaryRequestVersion = 0;
@@ -1113,18 +1091,24 @@
       body.append(row);
     }
 
-    const holiday = summary.holiday_data || {};
-    const sourceLabels = {
-      cache: '保存済みの祝日データ',
-      'official-csv': '内閣府の祝日CSV',
-      'rule-based': '通用ルールによる推算（特例の祝日移動等は反映されません）',
-      unavailable: '祝日データを取得できませんでした',
-    };
-    const note = byId('holiday-source-note');
-    if (note) {
-      note.textContent = `祝日情報：${sourceLabels[holiday.source] || '取得元不明'}${holiday.synced_at ? `（同期：${formatDateTime(holiday.synced_at)}）` : ''}`;
-      note.dataset.incomplete = holiday.complete === false ? 'true' : 'false';
-    }
+    renderHolidaySourceNote(byId('holiday-source-note'), summary.holiday_data);
+  }
+
+  const HOLIDAY_SOURCE_LABELS = Object.freeze({
+    cache: '保存済みの祝日データ',
+    'official-csv': '内閣府の祝日CSV',
+    'rule-based': '通用ルールによる推算（特例の祝日移動等は反映されません）',
+    unavailable: '祝日データを取得できませんでした',
+  });
+
+  /** Calendar and Summary each carry their own copy of this note. */
+  function renderHolidaySourceNote(note, holidayData) {
+    if (!note) return;
+    const holiday = holidayData || {};
+    const label = HOLIDAY_SOURCE_LABELS[holiday.source] || '取得元不明';
+    const syncedAt = holiday.synced_at ? `（同期：${formatDateTime(holiday.synced_at)}）` : '';
+    note.textContent = `祝日情報：${label}${syncedAt}`;
+    note.dataset.incomplete = holiday.complete === false ? 'true' : 'false';
   }
 
   let excelScriptLoading = null;
@@ -1267,7 +1251,7 @@
     await withBusy(button, '保存中…', async () => {
       try {
         const response = await api('/api/auth/profile', { method: 'PATCH', body });
-        state.user = normalizeUser(response.user || response.data?.user || response);
+        state.user = normalizeUser(response.user);
         renderUserIdentity();
         applyUserDefaults();
         state.monthCache.clear();
@@ -1306,14 +1290,14 @@
           method: 'POST',
           body: { current_password: currentPassword },
         });
-        const reauthToken = verification.reauth_token || verification.data?.reauth_token;
+        const reauthToken = verification.reauth_token;
         if (!reauthToken) throw new Error('Password reauthentication token is missing');
         const response = await api('/api/auth/profile/password', {
           method: 'POST',
           body: { new_password: newPassword, reauth_token: reauthToken },
         });
-        if (response.user || response.data?.user) {
-          state.user = normalizeUser(response.user || response.data.user);
+        if (response.user) {
+          state.user = normalizeUser(response.user);
           renderUserIdentity();
         }
         form.reset();
@@ -1572,7 +1556,13 @@
 
   async function refreshVisibleData(date) {
     const tasks = [];
-    if (date === (state.today?.date || todayIso())) tasks.push(loadToday());
+    // The Today view is built from today's record *and* from any still-open
+    // shift left on the previous day (active_record / stale_record). Repairing
+    // yesterday from the stale-record notice is the only way out of a state
+    // where both punch buttons are disabled, so that edit has to reload Today
+    // as well or the notice and the disabled buttons survive the fix.
+    const todayDate = state.today?.date || todayIso();
+    if (date === todayDate || date === previousDate(todayDate)) tasks.push(loadToday());
     if (state.page === 'calendar') tasks.push(loadCalendar(true));
     if (state.page === 'summary') tasks.push(loadSummary(true));
     await Promise.all(tasks);
@@ -1585,7 +1575,7 @@
   async function loadAdminUsers() {
     try {
       const raw = await api('/api/admin/users');
-      const users = Array.isArray(raw.users) ? raw.users : (Array.isArray(raw.data?.users) ? raw.data.users : []);
+      const users = Array.isArray(raw.users) ? raw.users : [];
       renderAdminUsers(users.map(normalizeUser));
     } catch (error) {
       handleAuthenticatedError(error, 'ユーザー一覧を取得できませんでした。');
@@ -1715,7 +1705,7 @@
     await withBusy(event.submitter, '保存中…', async () => {
       try {
         const response = await api(`/api/admin/users/${user.id}`, { method: 'PATCH', body });
-        const updated = normalizeUser(response.user || response.data?.user || response);
+        const updated = normalizeUser(response.user);
         closeAdminUserDialog();
         // Editing your own row changes the defaults the punch form is built from.
         if (updated.id && updated.id === state.user?.id) {
@@ -1810,7 +1800,7 @@
       const [year, month] = splitMonth(requestedMonth);
       const raw = await api(`/api/admin/overview/${year}/${month}`);
       if (version !== adminOverviewRequestVersion || requestedMonth !== state.adminMonth) return;
-      const users = Array.isArray(raw.users) ? raw.users : (Array.isArray(raw.data?.users) ? raw.data.users : []);
+      const users = Array.isArray(raw.users) ? raw.users : [];
       renderAdminOverview(users);
     } catch (error) {
       if (version !== adminOverviewRequestVersion) return;
@@ -1879,38 +1869,25 @@
 
   function normalizeMonthlySummary(raw, year, month) {
     const source = unwrap(raw);
-    let recordsSource = source.records;
-    let summarySource = source;
-    if (!Array.isArray(recordsSource) && Array.isArray(source.days)) {
-      recordsSource = source.days.map((day) => ({
-        ...(day.record || {}),
-        work_date: day.date,
-        day_of_week: day.day_of_week,
-        is_holiday: day.is_holiday,
-        holiday_name: day.holiday_name,
-        work_minutes: day.work_minutes,
-      }));
-      summarySource = { ...source, ...unwrap(source.summary || {}) };
-    }
-    const records = Array.isArray(recordsSource)
-      ? recordsSource.map((record) => normalizeRecord(record)).filter((record) => record.work_date)
+    const records = Array.isArray(source.records)
+      ? source.records.map((record) => normalizeRecord(record)).filter((record) => record.work_date)
       : [];
-    const derived = deriveSummary(records, year, month);
+    const derived = deriveSummary(records);
     return {
       year: boundedInteger(source.year, year, 1955, 2100),
       month: boundedInteger(source.month, month, 1, 12),
       username: safeString(source.username, state.user?.username || ''),
       employee_name: safeString(source.employee_name, state.user?.display_name || ''),
-      office_days: finiteOr(summarySource.office_days, derived.office_days),
-      remote_days: finiteOr(summarySource.remote_days, derived.remote_days),
-      paid_leave_days: finiteOr(summarySource.paid_leave_days, derived.paid_leave_days),
-      absent_days: finiteOr(summarySource.absent_days, derived.absent_days),
-      scheduled_work_days: finiteOr(summarySource.scheduled_work_days, derived.scheduled_work_days),
-      incomplete_days: finiteOr(summarySource.incomplete_days, derived.incomplete_days),
-      total_work_minutes: finiteOr(summarySource.total_work_minutes, derived.total_work_minutes),
-      total_transport_fee: finiteOr(summarySource.total_transport_fee, derived.total_transport_fee),
-      overtime_minutes: finiteOr(summarySource.overtime_minutes, Math.max(0, derived.total_work_minutes - state.config.overtime_threshold_hours * 60)),
-      overtime_threshold_minutes: finiteOr(summarySource.overtime_threshold_minutes, state.config.overtime_threshold_hours * 60),
+      office_days: finiteOr(source.office_days, derived.office_days),
+      remote_days: finiteOr(source.remote_days, derived.remote_days),
+      paid_leave_days: finiteOr(source.paid_leave_days, derived.paid_leave_days),
+      absent_days: finiteOr(source.absent_days, derived.absent_days),
+      scheduled_work_days: finiteOr(source.scheduled_work_days, derived.scheduled_work_days),
+      incomplete_days: finiteOr(source.incomplete_days, derived.incomplete_days),
+      total_work_minutes: finiteOr(source.total_work_minutes, derived.total_work_minutes),
+      total_transport_fee: finiteOr(source.total_transport_fee, derived.total_transport_fee),
+      overtime_minutes: finiteOr(source.overtime_minutes, Math.max(0, derived.total_work_minutes - state.config.overtime_threshold_hours * 60)),
+      overtime_threshold_minutes: finiteOr(source.overtime_threshold_minutes, state.config.overtime_threshold_hours * 60),
       records,
       holiday_data: unwrap(source.holiday_data || {}),
     };
@@ -1955,7 +1932,7 @@
     };
   }
 
-  function deriveSummary(records, year, month) {
+  function deriveSummary(records) {
     const result = {
       office_days: 0,
       remote_days: 0,
@@ -1977,17 +1954,6 @@
       result.total_work_minutes += record.work_minutes || 0;
       result.total_transport_fee += record.transport_fee || 0;
     });
-    if (records.length < 20) {
-      const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
-      result.scheduled_work_days = 0;
-      for (let day = 1; day <= days; day += 1) {
-        const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const record = records.find((item) => item.work_date === date);
-        const dow = weekdayIndex(date);
-        const isHoliday = record ? record.is_holiday : false;
-        if (dow !== 0 && dow !== 6 && !isHoliday) result.scheduled_work_days += 1;
-      }
-    }
     return result;
   }
 
@@ -2049,13 +2015,11 @@
       }
     }
     if (!response.ok) {
+      // Every route answers a failure with a flat `{ error: "…" }` in Japanese,
+      // so that string is the message; anything else falls back to the status.
       let message = `HTTP ${response.status}`;
-      if (typeof data === 'object' && data) {
-        if (data.error && Array.isArray(data.error.issues)) {
-          message = data.error.issues.map((i) => i.message).join('、');
-        } else {
-          message = safeString(data.error || data.message, message);
-        }
+      if (data && typeof data === 'object') {
+        message = safeString(data.error || data.message, message);
       } else {
         message = safeString(data, message);
       }
@@ -2222,18 +2186,6 @@
 
   function isScheduledDay(record) {
     return record.day_of_week !== 0 && record.day_of_week !== 6 && !record.is_holiday;
-  }
-
-  function isWorkingRecord(record) {
-    return Boolean(record?.persisted && isWorking(record.work_type));
-  }
-
-  function isMissingPunch(record) {
-    return !record?.persisted || (isWorking(record.work_type) && !record.clock_in);
-  }
-
-  function isOpenShift(record) {
-    return Boolean(record?.persisted && isWorking(record.work_type) && record.clock_in && !record.clock_out);
   }
 
   function attendanceState(record, date, today) {
@@ -2597,10 +2549,9 @@
       .slice(0, 1000);
   }
 
+  /** Guards every response reader against a null or non-object body. */
   function unwrap(value) {
-    if (!value || typeof value !== 'object') return {};
-    if (value.data && typeof value.data === 'object' && !Array.isArray(value.data)) return value.data;
-    return value;
+    return value && typeof value === 'object' ? value : {};
   }
 
   function errorMessage(error, fallback) {
@@ -2620,8 +2571,11 @@
   }
 
   function applyStoredTheme() {
+    // Reading localStorage throws outright when site data is blocked, so a
+    // failed read has to leave the empty default in place rather than reassign
+    // it.
     let theme = '';
-    try { theme = localStorage.getItem('kintai-theme') || ''; } catch { theme = ''; }
+    try { theme = localStorage.getItem('kintai-theme') || ''; } catch { /* storage can be unavailable */ }
     if (theme !== 'light' && theme !== 'dark') {
       theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     }

@@ -120,10 +120,14 @@ auth.use('*', async (c, next) => {
 
 // GET /api/auth/status
 auth.get('/status', async (c) => {
-  const configured = await c.env.DB.prepare(
-    'SELECT EXISTS(SELECT 1 FROM users LIMIT 1) AS value',
-  ).first<{ value: number }>();
-  const user = await getRequestUser(c.env, c.req.raw);
+  // This is the first authenticated call of every page load, so the two
+  // independent lookups issue together rather than costing two serial D1 round
+  // trips.
+  const [configured, user] = await Promise.all([
+    c.env.DB.prepare('SELECT EXISTS(SELECT 1 FROM users LIMIT 1) AS value')
+      .first<{ value: number }>(),
+    getRequestUser(c.env, c.req.raw),
+  ]);
 
   return c.json({
     setup_required: configured?.value !== 1,

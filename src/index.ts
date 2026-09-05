@@ -6,7 +6,6 @@ import exportRoutes from './routes/export';
 import { authMiddleware, type AuthEnv } from './middleware/auth';
 import { getPublicConfig } from './utils/config';
 import {
-  getHolidayData,
   HolidayDataUnavailableError,
   syncCurrentAndNextOfficialHolidays,
 } from './utils/holidays';
@@ -81,16 +80,6 @@ app.route('/api/auth', authRoutes);
 app.route('/api/attendance', attendanceRoutes);
 app.route('/api/export', exportRoutes);
 app.route('/api/admin', adminRoutes);
-
-app.get('/api/holidays/:year', authMiddleware, async (c) => {
-  const yearText = c.req.param('year');
-  if (!/^\d{4}$/.test(yearText)) throw new RequestValidationError('年が正しくありません');
-  const year = Number(yearText);
-  if (year < 1955 || year > 2100) throw new RequestValidationError('年は1955から2100の間で指定してください');
-  const holidayData = await getHolidayData(c.env, year);
-  c.header('Cache-Control', 'private, max-age=86400, stale-while-revalidate=604800');
-  return c.json(holidayData);
-});
 
 app.notFound((c) => c.json({ error: 'APIが見つかりません' }, 404));
 

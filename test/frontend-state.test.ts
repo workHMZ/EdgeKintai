@@ -27,6 +27,7 @@ interface TestHooks {
   renderAdminOverview: (users: unknown[]) => void;
   formatDateTime: (value: string | Date) => string;
   renderShiftNotice: (kind: string | null, message?: string, fixDate?: string) => void;
+  refreshVisibleData: (date: string) => Promise<void>;
   api: (path: string, options?: Record<string, unknown>) => Promise<unknown>;
   normalizeTimestampInput: (value: unknown) => unknown;
   getElement: (id: string) => {
@@ -43,6 +44,8 @@ interface TestHooks {
   getLastObservedDate: () => string;
   setLastObservedDate: (val: string) => void;
   setUser: (user: unknown) => void;
+  setToday: (today: unknown) => void;
+  setPage: (page: string) => void;
   setApiMock: (fn: (path: string) => Promise<unknown>) => void;
 }
 
@@ -67,10 +70,13 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
       formatDateTime,
       normalizeTimestampInput,
       renderShiftNotice,
+      refreshVisibleData,
       api,
       getLastObservedDate: () => lastObservedDate,
       setLastObservedDate: (val) => { lastObservedDate = val; },
       setUser: (u) => { state.user = u; },
+      setToday: (t) => { state.today = t; },
+      setPage: (p) => { state.page = p; },
       setApiMock: (fn) => { api = fn; },
       getElement: (id) => document.getElementById(id),
     };
@@ -264,6 +270,35 @@ describe('Frontend Pure State Logic', () => {
     expect(isStalePreviousDayRecord(record, '2026-08-15', '09:00')).toBe(false);
     expect(isStalePreviousDayRecord(record, '2026-08-15', '09:01')).toBe(true);
     expect(isStalePreviousDayRecord(record, '2026-08-14', '23:59')).toBe(false);
+  });
+
+  it('reloads Today after repairing the previous day, not just today', async () => {
+    // A stale open shift from yesterday disables both punch buttons and offers
+    // the record editor as the only way out. Saving that repair has to refresh
+    // Today, or the warning and the disabled buttons survive the fix and the
+    // user stays locked out until a manual page reload.
+    const requested: string[] = [];
+    const hooks = loadFrontendHooks(async (path) => {
+      requested.push(path);
+      throw new Error('stop before rendering');
+    });
+    hooks.setUser({ id: 1 });
+    hooks.setToday({ date: '2026-08-15' });
+    hooks.setPage('today');
+
+    await hooks.refreshVisibleData('2026-08-14');
+    expect(requested).toEqual(['/api/attendance/today']);
+
+    // Editing today itself keeps the behaviour it always had.
+    requested.length = 0;
+    await hooks.refreshVisibleData('2026-08-15');
+    expect(requested).toEqual(['/api/attendance/today']);
+
+    // Days Today cannot display must not trigger a pointless request; the
+    // punch card only ever reads today and yesterday.
+    requested.length = 0;
+    await hooks.refreshVisibleData('2026-08-13');
+    expect(requested).toEqual([]);
   });
 
   it('uses loadToday production failure semantics and retries a failed date rollover', async () => {

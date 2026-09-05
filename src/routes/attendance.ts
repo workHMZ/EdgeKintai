@@ -432,16 +432,15 @@ attendance.put('/:date', async (c) => {
       }
     }
   } else {
+    // paid_leave, holiday and absent record no punches and no break.
     clockIn = null;
     clockOut = null;
     breakMinutes = 0;
-    oneWayFare = 0;
-    tripType = 'one_way';
-    transportMode = 'rail';
-    transportOrigin = '';
-    transportDestination = '';
   }
 
+  // Commute belongs to an office day only. Remote and every non-working type
+  // store the same zeroed snapshot, which the schema's CHECK constraints also
+  // require. This covers the branch above, since none of those types is office.
   if (workType !== 'office') {
     oneWayFare = 0;
     tripType = 'one_way';
