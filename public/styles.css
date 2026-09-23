@@ -23,6 +23,36 @@
   --font: Inter, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, system-ui, -apple-system, sans-serif;
 }
 
+/*
+ * Light palette, stated twice: once for a device in light mode with no stored
+ * choice (data-theme is absent until the user toggles), so the very first
+ * paint already matches the system instead of waiting for app.js; and once
+ * for an explicit light choice on a dark-mode device. Keep the two in sync.
+ */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f2f4f5;
+    --surface: #ffffff;
+    --surface-raised: #f8f9fa;
+    --surface-soft: #eef1f3;
+    --border: #dce2e6;
+    --border-strong: #c8d0d6;
+    --text: #172028;
+    --muted: #596873;
+    --subtle: #84919a;
+    --primary: #a97716;
+    --primary-strong: #8e620e;
+    --primary-ink: #ffffff;
+    --success: #227d59;
+    --danger: #b73d3d;
+    --warning: #9b640b;
+    --incomplete: #c2410c;
+    --info: #236b98;
+    --shadow: 0 18px 45px rgb(31 42 51 / 10%);
+  }
+}
+
 :root[data-theme="light"] {
   color-scheme: light;
   --bg: #f2f4f5;
@@ -53,10 +83,24 @@ html {
   min-width: 320px;
   min-height: 100%;
   background: var(--bg);
+  /* Keeps the layout from shifting sideways when an open dialog locks scroll
+     on a Mac set to always show scroll bars. */
+  scrollbar-gutter: stable;
 }
 
+/* A modal dialog does not stop the page behind it from scrolling, which on iOS
+   also drags the page along once the dialog's own scroll reaches its end. */
+:root:has(dialog[open]) {
+  overflow: hidden;
+}
+
+/*
+ * svh rather than vh: on iOS Safari 100vh is the height with the toolbars
+ * collapsed, so anything sized to it starts out taller than what is visible.
+ */
 body {
   min-height: 100vh;
+  min-height: 100svh;
   margin: 0;
   background:
     radial-gradient(circle at 10% -10%, rgb(229 194 118 / 10%), transparent 30rem),
@@ -123,8 +167,13 @@ textarea:disabled {
 .auth-shell {
   display: grid;
   min-height: 100vh;
+  min-height: 100svh;
   place-items: center;
-  padding: 1.25rem;
+  padding:
+    max(1.25rem, env(safe-area-inset-top, 0px))
+    max(1.25rem, env(safe-area-inset-right, 0px))
+    max(1.25rem, env(safe-area-inset-bottom, 0px))
+    max(1.25rem, env(safe-area-inset-left, 0px));
 }
 
 .loading-card,
@@ -269,8 +318,15 @@ textarea:disabled {
   transition: color 140ms ease;
 }
 
-.text-button-link:hover {
-  color: var(--primary-strong);
+/*
+ * Every :hover sits behind (hover: hover). On a touch screen WebKit applies
+ * :hover on tap and keeps it until the next tap elsewhere, so a calendar day or
+ * table row stayed highlighted after its dialog closed.
+ */
+@media (hover: hover) {
+  .text-button-link:hover {
+    color: var(--primary-strong);
+  }
 }
 
 .preset-chips {
@@ -292,10 +348,12 @@ textarea:disabled {
   transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
-.chip-btn:hover {
-  border-color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
-  color: var(--primary);
+@media (hover: hover) {
+  .chip-btn:hover {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+    color: var(--primary);
+  }
 }
 
 .chip-btn:active {
@@ -333,10 +391,6 @@ select {
   cursor: pointer;
 }
 
-select::-ms-expand {
-  display: none;
-}
-
 input[type="date"],
 input[type="time"],
 input[type="month"] {
@@ -365,10 +419,12 @@ textarea {
   resize: vertical;
 }
 
-input:hover,
-select:hover,
-textarea:hover {
-  border-color: var(--border-strong);
+@media (hover: hover) {
+  input:hover,
+  select:hover,
+  textarea:hover {
+    border-color: var(--border-strong);
+  }
 }
 
 input:focus,
@@ -425,10 +481,12 @@ textarea:focus {
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
-.stepper-btn:hover {
-  background: var(--surface);
-  color: var(--primary);
-  border-color: var(--primary);
+@media (hover: hover) {
+  .stepper-btn:hover {
+    background: var(--surface);
+    color: var(--primary);
+    border-color: var(--primary);
+  }
 }
 
 .stepper-btn:active {
@@ -488,11 +546,13 @@ textarea:focus {
   padding: 0.55rem 0.9rem;
 }
 
-.button:hover:not(:disabled),
-.icon-button:hover:not(:disabled),
-.nav-button:hover:not(:disabled) {
-  border-color: var(--primary);
-  color: var(--primary);
+@media (hover: hover) {
+  .button:hover:not(:disabled),
+  .icon-button:hover:not(:disabled),
+  .nav-button:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
 }
 
 .button:active:not(:disabled),
@@ -507,10 +567,12 @@ textarea:focus {
   color: var(--primary-ink);
 }
 
-.button-primary:hover:not(:disabled) {
-  border-color: var(--primary-strong);
-  background: var(--primary-strong);
-  color: var(--primary-ink);
+@media (hover: hover) {
+  .button-primary:hover:not(:disabled) {
+    border-color: var(--primary-strong);
+    background: var(--primary-strong);
+    color: var(--primary-ink);
+  }
 }
 
 .button-secondary {
@@ -519,10 +581,12 @@ textarea:focus {
   color: var(--text);
 }
 
-.button-secondary:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--primary) 70%, var(--border));
-  background: color-mix(in srgb, var(--primary) 8%, var(--surface-raised));
-  color: var(--primary);
+@media (hover: hover) {
+  .button-secondary:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--primary) 70%, var(--border));
+    background: color-mix(in srgb, var(--primary) 8%, var(--surface-raised));
+    color: var(--primary);
+  }
 }
 
 .button-danger {
@@ -531,10 +595,12 @@ textarea:focus {
   color: var(--danger);
 }
 
-.button-danger:hover:not(:disabled) {
-  border-color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 18%, var(--surface));
-  color: var(--danger);
+@media (hover: hover) {
+  .button-danger:hover:not(:disabled) {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 18%, var(--surface));
+    color: var(--danger);
+  }
 }
 
 .button-quiet {
@@ -619,7 +685,7 @@ textarea:focus {
 .app-shell {
   width: min(100%, 1180px);
   min-height: 100vh;
-  min-height: 100dvh;
+  min-height: 100svh;
   margin: 0 auto;
   border-right: 1px solid var(--border);
   border-left: 1px solid var(--border);
@@ -732,8 +798,11 @@ textarea:focus {
 
 .main-content {
   min-height: calc(100vh - 8rem);
-  min-height: calc(100dvh - 8rem);
+  min-height: calc(100svh - 8rem);
   padding: clamp(1rem, 3vw, 1.75rem);
+  /* With viewport-fit=cover a Home Screen web app draws under the home
+     indicator, which would otherwise sit on top of the last button. */
+  padding-bottom: calc(clamp(1rem, 3vw, 1.75rem) + env(safe-area-inset-bottom, 0px));
 }
 
 .page {
@@ -1038,6 +1107,7 @@ textarea:focus {
 }
 
 .record-facts div {
+  position: relative;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-small);
@@ -1141,40 +1211,33 @@ textarea:focus {
   transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
 }
 
-.month-control .icon-button:hover:not(:disabled) {
-  border-color: var(--primary);
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 8%, var(--surface-raised));
+@media (hover: hover) {
+  .month-control .icon-button:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 8%, var(--surface-raised));
+  }
 }
 
-.month-control input[type="month"] {
-  width: 10.5rem;
+.month-select {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* Base select styling (border, focus ring, chevron) comes from `select`. */
+.month-control select {
+  width: auto;
+  min-width: 0;
   height: 2.35rem;
   min-height: 2.35rem;
-  max-height: 2.35rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-small);
-  background: var(--surface-raised);
-  color: var(--text);
+  padding: 0 1.9rem 0 0.7rem;
+  background-position: right 0.55rem center;
+  /* 1rem, not smaller: iOS zooms the page into any control under 16px. */
   font-size: 1rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  padding: 0 0.75rem;
-  text-align: center;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
-}
-
-.month-control input[type="month"]:hover {
-  border-color: var(--border-strong);
-}
-
-.month-control input[type="month"]:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .month-control .month-current-btn {
@@ -1196,10 +1259,12 @@ textarea:focus {
   transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 140ms ease;
 }
 
-.month-control .month-current-btn:hover:not(:disabled) {
-  border-color: var(--primary);
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 8%, var(--surface-raised));
+@media (hover: hover) {
+  .month-control .month-current-btn:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 8%, var(--surface-raised));
+  }
 }
 
 .month-control .month-current-btn:active:not(:disabled) {
@@ -1258,8 +1323,10 @@ textarea:focus {
   text-align: left;
 }
 
-.calendar-day:hover {
-  background: var(--surface-raised);
+@media (hover: hover) {
+  .calendar-day:hover {
+    background: var(--surface-raised);
+  }
 }
 
 .calendar-day.is-today {
@@ -1270,8 +1337,10 @@ textarea:focus {
   background: color-mix(in srgb, var(--incomplete) 7%, var(--surface));
 }
 
-.calendar-day.is-incomplete:hover {
-  background: color-mix(in srgb, var(--incomplete) 12%, var(--surface-raised));
+@media (hover: hover) {
+  .calendar-day.is-incomplete:hover {
+    background: color-mix(in srgb, var(--incomplete) 12%, var(--surface-raised));
+  }
 }
 
 .calendar-day.is-incomplete .calendar-date {
@@ -1302,15 +1371,6 @@ textarea:focus {
   font-size: 0.6rem;
   font-weight: 800;
   padding: 0.05rem 0.35rem;
-}
-
-.record-facts div {
-  position: relative;
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-small);
-  background: var(--surface-raised);
-  padding: 0.65rem;
 }
 
 .live-work-pulse {
@@ -1346,7 +1406,8 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.type-badge[data-type="office"] { border-color: color-mix(in srgb, var(--success) 45%, var(--border)); color: var(--success); }
+.type-badge[data-type="office"],
+.type-badge[data-type="working"] { border-color: color-mix(in srgb, var(--success) 45%, var(--border)); color: var(--success); }
 .type-badge[data-type="remote"] { border-color: color-mix(in srgb, var(--info) 45%, var(--border)); color: var(--info); }
 .type-badge[data-type="paid_leave"] { border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); color: var(--primary); }
 .type-badge[data-type="holiday"],
@@ -1445,8 +1506,10 @@ tbody tr:last-child td {
   border-bottom: 0;
 }
 
-tbody tr:hover td {
-  background: var(--surface-raised);
+@media (hover: hover) {
+  tbody tr:hover td {
+    background: var(--surface-raised);
+  }
 }
 
 tbody tr.is-incomplete-row td {
@@ -1454,8 +1517,10 @@ tbody tr.is-incomplete-row td {
   font-weight: 600;
 }
 
-tbody tr.is-incomplete-row:hover td {
-  background: color-mix(in srgb, var(--incomplete) 9%, var(--surface-raised)) !important;
+@media (hover: hover) {
+  tbody tr.is-incomplete-row:hover td {
+    background: color-mix(in srgb, var(--incomplete) 9%, var(--surface-raised)) !important;
+  }
 }
 
 .empty-table-cell {
@@ -1480,8 +1545,9 @@ tbody tr.is-incomplete-row:hover td {
 .record-dialog {
   width: min(calc(100% - 1.5rem), 680px);
   max-height: calc(100vh - 1.5rem);
-  max-height: calc(100dvh - 1.5rem);
+  max-height: calc(100dvh - 1.5rem - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border-strong);
   border-radius: calc(var(--radius) + 2px);
   background: var(--surface);
@@ -1497,9 +1563,10 @@ tbody tr.is-incomplete-row:hover td {
 }
 
 .record-dialog form {
+  --dialog-pad: clamp(1rem, 3vw, 1.35rem);
   display: grid;
   gap: 0.9rem;
-  padding: clamp(1rem, 3vw, 1.35rem);
+  padding: var(--dialog-pad);
 }
 
 .date-context {
@@ -1511,14 +1578,23 @@ tbody tr.is-incomplete-row:hover td {
   font-size: 0.82rem;
 }
 
+/*
+ * On a phone the record editor is taller than the screen, so 保存 stays pinned
+ * to the bottom of the dialog's own scroll area instead of being at the end of
+ * it. The negative margins let the bar span the form padding edge to edge.
+ */
 .dialog-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  margin-top: 0.25rem;
-  padding-top: 0.9rem;
+  margin: 0.25rem calc(-1 * var(--dialog-pad)) calc(-1 * var(--dialog-pad));
+  padding: 0.9rem var(--dialog-pad) var(--dialog-pad);
   border-top: 1px solid var(--border);
+  background: var(--surface);
 }
 
 /* Secondary block inside a dialog, separated the same way as .dialog-actions. */
@@ -1584,10 +1660,6 @@ tbody tr.is-incomplete-row:hover td {
     grid-template-columns: 1fr;
   }
 
-  .settings-profile-layout {
-    grid-template-columns: 1fr;
-  }
-
   .record-facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1612,13 +1684,23 @@ tbody tr.is-incomplete-row:hover td {
     padding-block: 0.7rem;
   }
 
+  /*
+   * Tighter tabs so all five, 管理 included, fit on a 375pt iPhone; they grow
+   * to fill wider phones and only scroll on the very narrowest screens.
+   */
   .primary-nav {
     top: 0;
     z-index: 30;
-    padding-block: 0.45rem;
-    -webkit-overflow-scrolling: touch;
+    gap: 0.15rem;
+    padding: 0.45rem 0.4rem;
     overscroll-behavior-inline: contain;
     scrollbar-width: none;
+  }
+
+  .nav-button {
+    flex: 1 0 auto;
+    padding-inline: 0.45rem;
+    font-size: 0.78rem;
   }
 
   .primary-nav::-webkit-scrollbar {
@@ -1710,10 +1792,14 @@ tbody tr.is-incomplete-row:hover td {
     gap: 0.3rem;
   }
 
-  .month-control input[type="month"] {
+  .month-select {
     flex: 1;
-    width: auto;
-    min-width: 0;
+  }
+
+  .month-select select {
+    flex: 1 1 auto;
+    padding-right: 1.6rem;
+    background-position: right 0.45rem center;
   }
 
   .month-control .month-current-btn {
@@ -1759,20 +1845,29 @@ tbody tr.is-incomplete-row:hover td {
     height: 0.62rem;
   }
 
+  /*
+   * One row where it fits (削除 | キャンセル 保存) so the pinned bar stays short;
+   * on the narrowest phones the pair wraps under 削除 instead of squeezing.
+   */
   .dialog-actions {
-    display: grid;
-    grid-template-columns: 1fr;
-    align-items: stretch;
+    flex-wrap: wrap;
+    gap: 0.5rem;
   }
 
-  .dialog-actions .button-row,
-  .dialog-actions .button {
-    width: 100%;
+  .dialog-actions > .button {
+    flex: 1 0 auto;
   }
 
+  /* Sized by its content, so the wrap happens exactly when a label would not fit. */
   .dialog-actions .button-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    flex: 1 1 auto;
+    grid-template-columns: repeat(2, minmax(max-content, 1fr));
+  }
+
+  .dialog-actions .button {
+    padding-inline: 0.6rem;
+    white-space: nowrap;
   }
 
   .metric-grid {
@@ -1814,6 +1909,7 @@ tbody tr.is-incomplete-row:hover td {
   #theme-button,
   #logout-button,
   #record-dialog,
+  #admin-user-dialog,
   #loading-view,
   #auth-view,
   #page-today,

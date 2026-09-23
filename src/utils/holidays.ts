@@ -1,4 +1,5 @@
 import type { Holiday, HolidayData } from '../types';
+import { parseDatabaseTimestamp } from './time';
 
 const OFFICIAL_CSV_URL =
   'https://www8.cao.go.jp/chosei/shukujitsu/syukujitsu.csv';
@@ -271,14 +272,6 @@ function validateOfficialYear(year: number, holidays: readonly Holiday[]): void 
     }
     seen.add(holiday.date_str);
   }
-}
-
-function parseDatabaseTimestamp(value: string | null): number | null {
-  if (!value) return null;
-  // SQLite datetime('now') has no timezone suffix but is UTC.
-  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
-  const timestamp = Date.parse(normalized);
-  return Number.isFinite(timestamp) ? timestamp : null;
 }
 
 function unavailableHolidayData(year: number): HolidayData {

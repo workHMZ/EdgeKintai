@@ -4,7 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light dark">
-    <meta name="theme-color" content="#101419">
+    <meta name="theme-color" content="#13191f" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -218,7 +219,10 @@
             </div>
             <div class="month-control">
               <button class="icon-button" type="button" data-month-target="calendar" data-month-delta="-1" aria-label="前月">‹</button>
-              <input id="calendar-month" type="month" min="1955-01" max="2100-12" aria-label="表示月">
+              <div class="month-select" role="group" aria-label="表示月">
+                <select id="calendar-year-select" data-month-select="calendar" aria-label="年"></select>
+                <select id="calendar-month-select" data-month-select="calendar" aria-label="月"></select>
+              </div>
               <button class="icon-button" type="button" data-month-target="calendar" data-month-delta="1" aria-label="翌月">›</button>
               <button id="calendar-month-current-btn" class="month-current-btn" type="button" data-month-current="calendar">今月</button>
             </div>
@@ -247,7 +251,10 @@
             </div>
             <div class="month-control">
               <button class="icon-button" type="button" data-month-target="summary" data-month-delta="-1" aria-label="前月">‹</button>
-              <input id="summary-month" type="month" min="1955-01" max="2100-12" aria-label="集計月">
+              <div class="month-select" role="group" aria-label="集計月">
+                <select id="summary-year-select" data-month-select="summary" aria-label="年"></select>
+                <select id="summary-month-select" data-month-select="summary" aria-label="月"></select>
+              </div>
               <button class="icon-button" type="button" data-month-target="summary" data-month-delta="1" aria-label="翌月">›</button>
               <button id="summary-month-current-btn" class="month-current-btn" type="button" data-month-current="summary">今月</button>
             </div>
@@ -413,6 +420,8 @@
             <section class="panel settings-card" aria-labelledby="password-form-title">
               <div class="panel-heading"><h2 id="password-form-title">パスワード変更</h2></div>
               <form id="password-form" class="stack compact" novalidate>
+                <!-- Tells password managers which account the new password belongs to. -->
+                <input id="password-form-username" type="text" autocomplete="username" hidden>
                 <div class="field">
                   <label for="current-password">現在のパスワード</label>
                   <input id="current-password" type="password" autocomplete="current-password" maxlength="128" required>
@@ -439,7 +448,10 @@
             </div>
             <div class="month-control">
               <button class="icon-button" type="button" data-month-target="admin" data-month-delta="-1" aria-label="前月">‹</button>
-              <input id="admin-month" type="month" min="1955-01" max="2100-12" aria-label="管理対象月">
+              <div class="month-select" role="group" aria-label="管理対象月">
+                <select id="admin-year-select" data-month-select="admin" aria-label="年"></select>
+                <select id="admin-month-select" data-month-select="admin" aria-label="月"></select>
+              </div>
               <button class="icon-button" type="button" data-month-target="admin" data-month-delta="1" aria-label="翌月">›</button>
               <button id="admin-month-current-btn" class="month-current-btn" type="button" data-month-current="admin">今月</button>
             </div>
@@ -450,10 +462,10 @@
               <div class="panel-heading"><h2>ユーザー追加</h2></div>
               <form id="admin-add-user-form" class="stack compact" novalidate>
                 <div class="field-grid">
-                  <div class="field"><label for="admin-new-username">ログイン名</label><input id="admin-new-username" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>
-                  <div class="field"><label for="admin-new-name">氏名</label><input id="admin-new-name" type="text" maxlength="80" required></div>
+                  <div class="field"><label for="admin-new-username">ログイン名</label><input id="admin-new-username" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required></div>
+                  <div class="field"><label for="admin-new-name">氏名</label><input id="admin-new-name" type="text" maxlength="80" autocomplete="off" required></div>
                 </div>
-                <div class="field"><label for="admin-new-password">初期パスワード</label><input id="admin-new-password" type="password" minlength="12" maxlength="128" required></div>
+                <div class="field"><label for="admin-new-password">初期パスワード</label><input id="admin-new-password" type="password" minlength="12" maxlength="128" autocomplete="new-password" required></div>
                 <div class="inline-options">
                   <label><input id="admin-new-is-admin" type="checkbox"> 管理者として作成</label>
                 </div>
@@ -517,7 +529,7 @@
                 <button type="button" class="chip-btn" data-value="60">60分</button>
               </div>
             </div>
-            <input id="record-break" type="number" min="0" max="480" step="1">
+            <input id="record-break" type="number" inputmode="numeric" min="0" max="480" step="1">
           </div>
         </div>
         <div class="field-grid" data-record-working-field>
@@ -546,7 +558,7 @@
           </div>
         </div>
         <div class="field-grid">
-          <div class="field" data-record-office-field><label for="record-one-way-fare">片道運賃（円）</label><input id="record-one-way-fare" type="number" min="0" max="100000" step="1"></div>
+          <div class="field" data-record-office-field><label for="record-one-way-fare">片道運賃（円）</label><input id="record-one-way-fare" type="number" inputmode="numeric" min="0" max="100000" step="1"></div>
           <div class="field" data-record-office-field>
             <label for="record-transport-mode">交通手段</label>
             <select id="record-transport-mode">
@@ -607,7 +619,7 @@
         <div class="field-grid">
           <div class="field">
             <label for="admin-edit-name">氏名（Excel表示名）</label>
-            <input id="admin-edit-name" type="text" maxlength="80" required>
+            <input id="admin-edit-name" type="text" maxlength="80" autocomplete="off" required>
           </div>
           <div class="field">
             <label for="admin-edit-work-type">既定の勤務区分</label>

@@ -270,6 +270,11 @@ admin.patch('/users/:id', async (c) => {
 admin.post('/users/:id/password', async (c) => {
   const actor = c.get('user');
   const targetId = positiveIdValue(c.req.param('id'));
+  // Resetting yourself here would skip the current-password check that
+  // /api/auth/profile/password enforces, and would also revoke this session.
+  if (targetId === actor.id) {
+    return c.json({ error: '自分のパスワードは個人設定から現在のパスワードを確認して変更してください' }, 400);
+  }
   const body = await readJsonObject(c.req.raw);
   assertOnlyKeys(body, ['new_password']);
   const newPassword = passwordValue(body.new_password, '新しいパスワード');

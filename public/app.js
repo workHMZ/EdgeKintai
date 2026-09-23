@@ -16,6 +16,7 @@
     other: 'その他',
   });
   const WEEKDAYS = Object.freeze(['日', '月', '火', '水', '木', '金', '土']);
+  const MONTH_TARGETS = Object.freeze(['calendar', 'summary', 'admin']);
   const MAX_SHIFT_MINUTES = 18 * 60;
   const DEFAULT_CONFIG = Object.freeze({
     timezone: 'Asia/Tokyo',
@@ -68,11 +69,10 @@
 
   async function initialize() {
     applyStoredTheme();
+    watchSystemTheme();
     bindEvents();
     startClock();
-    byId('calendar-month').value = state.calendarMonth;
-    byId('summary-month').value = state.summaryMonth;
-    byId('admin-month').value = state.adminMonth;
+    MONTH_TARGETS.forEach(renderMonthControl);
 
     try {
       // /api/config and /api/auth/status do not depend on each other, so both
@@ -130,22 +130,7 @@
       }
       const currentBtn = event.target.closest('[data-month-current]');
       if (currentBtn) {
-        const target = currentBtn.dataset.monthCurrent;
-        const cur = currentMonthValue();
-        if (target === 'calendar') {
-          state.calendarMonth = cur;
-          byId('calendar-month').value = cur;
-          void loadCalendar(true);
-        } else if (target === 'summary') {
-          state.summaryMonth = cur;
-          byId('summary-month').value = cur;
-          updateExcelFilenamePreview();
-          void loadSummary(true);
-        } else if (target === 'admin') {
-          state.adminMonth = cur;
-          byId('admin-month').value = cur;
-          void loadAdminOverview();
-        }
+        setMonth(currentBtn.dataset.monthCurrent, currentMonthValue(), true);
         hapticFeedback();
         return;
       }
@@ -165,24 +150,16 @@
       }
     });
 
-    byId('calendar-month').addEventListener('change', () => {
-      const value = validMonthValue(byId('calendar-month').value);
-      if (!value) return;
-      state.calendarMonth = value;
-      void loadCalendar(true);
-    });
-    byId('summary-month').addEventListener('change', () => {
-      const value = validMonthValue(byId('summary-month').value);
-      if (!value) return;
-      state.summaryMonth = value;
-      updateExcelFilenamePreview();
-      void loadSummary(true);
-    });
-    byId('admin-month').addEventListener('change', () => {
-      const value = validMonthValue(byId('admin-month').value);
-      if (!value) return;
-      state.adminMonth = value;
-      void loadAdminOverview();
+    // Year and month are two selects rather than <input type="month">: desktop
+    // Safari recognizes that type but renders it as a bare text field.
+    document.addEventListener('change', (event) => {
+      const select = event.target.closest('[data-month-select]');
+      if (!select) return;
+      const target = select.dataset.monthSelect;
+      const value = validMonthValue(
+        `${byId(`${target}-year-select`)?.value}-${byId(`${target}-month-select`)?.value}`,
+      );
+      if (value) setMonth(target, value, true);
     });
 
     byId('clock-work-type').addEventListener('change', updateClockForm);
@@ -219,6 +196,8 @@
     });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
+        // The system appearance may have switched (Auto) while in background.
+        renderThemeChrome();
         void handlePotentialDateRollover();
       }
     });
@@ -329,8 +308,13 @@
   }
 
   function showAuthentication(setupRequired) {
+    // A modal left open (a session that expired mid-edit) sits in the top layer
+    // above the login form and makes it inert, so it has to go first.
+    if (byId('record-dialog')?.open) closeRecordDialog();
+    if (byId('admin-user-dialog')?.open) closeAdminUserDialog();
     byId('app-view').hidden = true;
     byId('auth-view').hidden = false;
+    syncThemeColor();
     byId('login-form').hidden = setupRequired;
     byId('setup-form').hidden = !setupRequired;
     byId('auth-description').textContent = setupRequired
@@ -417,6 +401,7 @@
     state.monthCache.clear();
     byId('auth-view').hidden = true;
     byId('app-view').hidden = false;
+    syncThemeColor();
     renderUserIdentity();
     applyUserDefaults();
     await navigate('today');
@@ -450,6 +435,8 @@
     byId('header-user-role').textContent = state.user.is_admin ? '管理者' : '一般';
     byId('admin-nav-button').hidden = !state.user.is_admin;
     byId('profile-username').value = state.user.username;
+    // defaultValue, so the password form's reset() after a change keeps it.
+    byId('password-form-username').defaultValue = state.user.username;
     byId('profile-display-name').value = state.user.display_name;
     byId('profile-one-way-fare').value = String(userOneWayFare());
     byId('profile-trip-type').value = userTripType();
@@ -484,8 +471,14 @@
     DOM.pageButtons.forEach((button) => {
       const active = button.dataset.page === nextPage;
       button.classList.toggle('is-active', active);
-      if (active) button.setAttribute('aria-current', 'page');
-      else button.removeAttribute('aria-current');
+      if (active) {
+        button.setAttribute('aria-current', 'page');
+        // When the tab strip does scroll (a larger text size), keep the
+        // current tab (e.g. 管理 at the far end) from sitting clipped.
+        button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      } else {
+        button.removeAttribute('aria-current');
+      }
     });
 
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -765,9 +758,10 @@
       const startMin = timeToMinutes(record.clock_in);
       const currentMin = timeToMinutes(nowTime());
       if (startMin !== null && currentMin !== null) {
-        let rawDiff = currentMin - startMin;
-        if (rawDiff < 0) rawDiff += 1440;
-        container.textContent = formatMinutes(rawDiff);
+        // Today's record started today, so a start later than now is a punch
+        // set ahead of time (e.g. to the official start), not an overnight
+        // shift; wrapping it around midnight would show ~23 hours.
+        container.textContent = formatMinutes(Math.max(0, currentMin - startMin));
         if (card && !existingPulse) {
           const pulse = createElement('span', { className: 'live-work-pulse', ariaHidden: 'true' });
           card.append(pulse);
@@ -1958,16 +1952,48 @@
   }
 
   function changeMonth(target, delta) {
-    if (!['calendar', 'summary', 'admin'].includes(target)) return;
-    const stateKey = `${target}Month`;
-    state[stateKey] = offsetMonth(state[stateKey], delta);
-    byId(`${target}-month`).value = state[stateKey];
-    if (target === 'calendar') void loadCalendar(false);
+    if (!MONTH_TARGETS.includes(target)) return;
+    setMonth(target, offsetMonth(state[`${target}Month`], delta), false);
+  }
+
+  function setMonth(target, value, force) {
+    if (!MONTH_TARGETS.includes(target)) return;
+    state[`${target}Month`] = value;
+    renderMonthControl(target);
+    if (target === 'calendar') void loadCalendar(force);
     if (target === 'summary') {
       updateExcelFilenamePreview();
-      void loadSummary(false);
+      void loadSummary(force);
     }
     if (target === 'admin') void loadAdminOverview();
+  }
+
+  /**
+   * The year list spans ten years back to next year, widened on demand when
+   * the ‹ › buttons step outside it, so the picker stays short to scroll.
+   */
+  function renderMonthControl(target) {
+    const yearSelect = byId(`${target}-year-select`);
+    const monthSelect = byId(`${target}-month-select`);
+    if (!yearSelect || !monthSelect) return;
+    const [year, month] = splitMonth(state[`${target}Month`]);
+
+    if (!Array.from(yearSelect.options).some((option) => option.value === String(year))) {
+      const currentYear = Number(currentMonthValue().slice(0, 4));
+      const first = Math.max(1955, Math.min(currentYear - 10, year, Number(yearSelect.options[0]?.value) || year));
+      const last = Math.min(2100, Math.max(currentYear + 1, year, Number(yearSelect.options[yearSelect.options.length - 1]?.value) || year));
+      const years = [];
+      for (let value = first; value <= last; value += 1) years.push(new Option(`${value}年`, String(value)));
+      yearSelect.replaceChildren(...years);
+    }
+    if (!monthSelect.options.length) {
+      monthSelect.replaceChildren(...Array.from({ length: 12 }, (_, index) => (
+        new Option(`${index + 1}月`, String(index + 1).padStart(2, '0'))
+      )));
+    }
+
+    yearSelect.value = String(year);
+    monthSelect.value = String(month).padStart(2, '0');
   }
 
   function invalidateMonth(monthValue) {
@@ -2567,27 +2593,75 @@
     document.body.append(anchor);
     anchor.click();
     anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // iOS Safari first asks whether to download and only reads the blob after
+    // the user confirms, so the URL has to outlive that prompt.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
+  function systemTheme() {
+    const query = systemThemeQuery || window.matchMedia('(prefers-color-scheme: light)');
+    return query.matches ? 'light' : 'dark';
+  }
+
+  function effectiveTheme() {
+    return document.documentElement.dataset.theme || systemTheme();
+  }
+
+  /**
+   * Without a stored choice there is no data-theme at all: the stylesheet then
+   * follows the system appearance by itself, before this script has run, so a
+   * light-mode device never flashes the dark palette on load.
+   */
   function applyStoredTheme() {
     // Reading localStorage throws outright when site data is blocked, so a
     // failed read has to leave the empty default in place rather than reassign
     // it.
     let theme = '';
     try { theme = localStorage.getItem('kintai-theme') || ''; } catch { /* storage can be unavailable */ }
-    if (theme !== 'light' && theme !== 'dark') {
-      theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-    }
-    document.documentElement.dataset.theme = theme;
-    byId('theme-button').textContent = theme === 'light' ? '☾' : '☀';
+    if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+    else delete document.documentElement.dataset.theme;
+    renderThemeChrome();
   }
 
   function toggleTheme() {
-    const theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-    document.documentElement.dataset.theme = theme;
-    byId('theme-button').textContent = theme === 'light' ? '☾' : '☀';
-    try { localStorage.setItem('kintai-theme', theme); } catch { /* storage can be unavailable */ }
+    const theme = effectiveTheme() === 'light' ? 'dark' : 'light';
+    // Choosing what the system already shows means "follow the system" again,
+    // so a later appearance change (macOS / iOS Auto) is honoured.
+    const followSystem = theme === systemTheme();
+    if (followSystem) delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+    try {
+      if (followSystem) localStorage.removeItem('kintai-theme');
+      else localStorage.setItem('kintai-theme', theme);
+    } catch { /* storage can be unavailable */ }
+    renderThemeChrome();
+  }
+
+  let systemThemeQuery = null;
+  function watchSystemTheme() {
+    // Held in a variable: a MediaQueryList nothing references can be collected
+    // together with its listener.
+    systemThemeQuery = window.matchMedia('(prefers-color-scheme: light)');
+    systemThemeQuery.addEventListener?.('change', renderThemeChrome);
+  }
+
+  function renderThemeChrome() {
+    byId('theme-button').textContent = effectiveTheme() === 'light' ? '☾' : '☀';
+    syncThemeColor();
+  }
+
+  /**
+   * From Safari 26 theme-color is only read by Home Screen / Dock web apps,
+   * where it tints the status bar, so it has to follow the in-app theme and the
+   * surface right under it: the header in the app, the page on the login view.
+   */
+  function syncThemeColor() {
+    const token = byId('app-view')?.hidden === false ? '--surface' : '--bg';
+    const color = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+    if (!color) return;
+    document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+      meta.setAttribute('content', color);
+    });
   }
 
   // Start only after every module-level formatter/cache has been initialized.

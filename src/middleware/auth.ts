@@ -1,7 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { User } from '../types';
 import { getSessionTtlSeconds } from '../utils/config';
-import { toSqliteDateTime } from '../utils/time';
+import { parseDatabaseTimestamp, toSqliteDateTime } from '../utils/time';
 
 export type AuthEnv = {
   Variables: {
@@ -15,9 +15,21 @@ export interface SessionHandle {
   expiresAt: Date;
 }
 
+/** The authenticated user plus the timestamps of the session that proved it. */
+export type SessionUser = User & {
+  session_expires_at: string;
+  session_created_at: string;
+};
+
 const COOKIE_NAME = '__Host-edge_kintai_session';
 const SESSION_TOKEN_BYTES = 32;
 const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
+/**
+ * Ceiling on how long sliding renewal can keep one login alive, counted from
+ * the session's creation. It equals the largest accepted SESSION_TTL_SECONDS,
+ * so configuring a 30-day TTL effectively turns renewal off.
+ */
+const SESSION_ABSOLUTE_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -54,11 +66,13 @@ export function getSessionToken(request: Request): string | null {
 export async function getSessionUser(
   env: CloudflareBindings,
   token: string,
-): Promise<User | null> {
+): Promise<SessionUser | null> {
   if (!TOKEN_PATTERN.test(token)) return null;
   const tokenHash = await hashSessionToken(token);
   return env.DB.prepare(
     `SELECT
+       s.expires_at AS session_expires_at,
+       s.created_at AS session_created_at,
        u.id,
        u.username,
        u.display_name,
@@ -82,15 +96,52 @@ export async function getSessionUser(
      LIMIT 1`,
   )
     .bind(tokenHash)
-    .first<User>();
+    .first<SessionUser>();
 }
 
 export async function getRequestUser(
   env: CloudflareBindings,
   request: Request,
-): Promise<User | null> {
+): Promise<SessionUser | null> {
   const token = getSessionToken(request);
   return token ? getSessionUser(env, token) : null;
+}
+
+/**
+ * Slides an in-use session forward once less than half of its TTL remains, so
+ * someone who punches in every day is not signed out mid-week. That costs at
+ * most one D1 write per session per half-TTL, and never extends a session past
+ * SESSION_ABSOLUTE_LIFETIME_MS from its creation.
+ */
+export async function renewSessionIfDue(
+  env: CloudflareBindings,
+  token: string,
+  user: SessionUser,
+  now = Date.now(),
+): Promise<SessionHandle | null> {
+  const expiresAt = parseDatabaseTimestamp(user.session_expires_at);
+  const createdAt = parseDatabaseTimestamp(user.session_created_at);
+  if (expiresAt === null || createdAt === null) return null;
+
+  const ttlMs = getSessionTtlSeconds(env) * 1000;
+  if (expiresAt - now > ttlMs / 2) return null;
+  // Whole seconds, because that is all the TEXT column and the cookie keep.
+  const renewedAt = Math.floor(
+    Math.min(now + ttlMs, createdAt + SESSION_ABSOLUTE_LIFETIME_MS) / 1000,
+  ) * 1000;
+  if (renewedAt <= expiresAt) return null;
+
+  const renewed = new Date(renewedAt);
+  // Matching the old expires_at lets only one of several concurrent requests
+  // renew; the others simply leave the cookie they came with in place.
+  const result = await env.DB.prepare(
+    `UPDATE sessions
+     SET expires_at = ?
+     WHERE token_id = ? AND user_id = ? AND expires_at = ?`,
+  )
+    .bind(toSqliteDateTime(renewed), await hashSessionToken(token), user.id, user.session_expires_at)
+    .run();
+  return (result.meta.changes ?? 0) === 1 ? { token, expiresAt: renewed } : null;
 }
 
 export async function markSessionReauthenticated(
@@ -180,8 +231,9 @@ export async function revokeAllUserSessions(
 }
 
 export const authMiddleware = createMiddleware<AuthEnv>(async (c, next) => {
-  const user = await getRequestUser(c.env, c.req.raw);
-  if (!user) {
+  const token = getSessionToken(c.req.raw);
+  const user = token ? await getSessionUser(c.env, token) : null;
+  if (!token || !user) {
     return c.json(
       { error: 'Unauthorized' },
       401,
@@ -191,6 +243,22 @@ export const authMiddleware = createMiddleware<AuthEnv>(async (c, next) => {
 
   c.set('user', user);
   await next();
+
+  // A handler that already rotated or cleared the cookie (password change)
+  // owns it, and a request that ended unauthenticated must not extend anything.
+  if (c.res.status === 401 || c.res.headers.has('Set-Cookie')) return;
+  try {
+    const renewed = await renewSessionIfDue(c.env, token, user);
+    if (renewed) c.res.headers.append('Set-Cookie', setSessionCookie(renewed));
+  } catch (error) {
+    // The handler's work has already succeeded; a failed renewal only means
+    // the session keeps its current expiry, so it must not turn into a 500.
+    console.error(JSON.stringify({
+      level: 'error',
+      event: 'session_renewal_failed',
+      error: error instanceof Error ? error.name : 'UnknownError',
+    }));
+  }
 });
 
 export function setSessionCookie(session: SessionHandle): string {

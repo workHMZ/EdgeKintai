@@ -33,6 +33,17 @@ export function toSqliteDateTime(date: Date): string {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+/**
+ * Inverse of toSqliteDateTime. SQLite `datetime('now')` carries no zone suffix
+ * but is UTC, whereas Date.parse would read the bare form as local time.
+ */
+export function parseDatabaseTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
 export function timeToMinutes(time: string): number {
   const [hours, minutes] = time.split(':').map(Number);
   return hours * 60 + minutes;

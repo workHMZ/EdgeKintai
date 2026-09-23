@@ -100,7 +100,7 @@ npm run dev
 | `DEFAULT_CLOCK_IN` | `10:00` | 出勤時刻の初期値 |
 | `DEFAULT_CLOCK_OUT` | `19:00` | 退勤時刻の初期値 |
 | `OVERTIME_THRESHOLD_HOURS` | `180` | 月次残業アラートの閾値（時間） |
-| `SESSION_TTL_SECONDS` | `604800` | セッション有効期間（秒、デフォルト 7 日） |
+| `SESSION_TTL_SECONDS` | `604800` | セッション有効期間（秒、デフォルト 7 日）。利用中は残りが半分を切ると自動延長（ログインから最長 30 日） |
 | `HEALTH_PROBE_ALLOWED_ORIGINS` | 空 | `/health` をブラウザから読み取れる Origin（カンマ区切り） |
 
 ユーザーごとの設定が優先されます。日ごとの勤務・時刻・通勤経路・交通費は勤務カレンダーから個別に変更できます。
@@ -142,7 +142,7 @@ npm run dev
 ## 注意事項
 
 - **Free プラン適合**: Static Assets は無料・無制限。`/api/*` と `/health` が Workers の 10 万リクエスト／日・CPU 10ms／回の対象です。D1 Free は 500MB／DB、読み取り 500 万行／日、書き込み 10 万行／日。
-- **セキュリティ**: Cookie は `HttpOnly; Secure; SameSite=Strict`。セッション token は SHA-256 ダイジェストのみ D1 に保存し、パスワード変更時は旧セッションを無効化します。
+- **セキュリティ**: Cookie は `HttpOnly; Secure; SameSite=Strict`。セッション token は SHA-256 ダイジェストのみ D1 に保存し、パスワード変更時は旧セッションを無効化します。利用中のセッションは自動延長されますが、ログインから 30 日で必ず失効します。
 - **プライバシー**: R2 は使用しません。氏名・駅名・勤務記録は D1 と、利用者が端末へダウンロードした Excel にのみ保存されます。
 - **バックアップ**: D1 Free は 7 日間の Time Travel がありますが、会社提出用データは別途バックアップを推奨します。
 

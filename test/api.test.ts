@@ -985,6 +985,13 @@ describe('EdgeKintai API', () => {
 
     const selfDelete = await jsonRequest('/api/admin/users/1', 'DELETE', {}, cookie);
     expect(selfDelete.status).toBe(400);
+    // The admin reset path must not become a way around re-authentication.
+    const selfReset = await jsonRequest('/api/admin/users/1/password', 'POST', {
+      new_password: 'another-password-123',
+    }, cookie);
+    expect(selfReset.status).toBe(400);
+    const stillSignedIn = await SELF.fetch(`${origin}/api/auth/me`, { headers: { Cookie: cookie } });
+    expect(stillSignedIn.status).toBe(200);
     const deleted = await jsonRequest(`/api/admin/users/${createdBody.user.id}`, 'DELETE', {}, cookie);
     expect(deleted.status).toBe(200);
   });
@@ -1049,6 +1056,46 @@ describe('EdgeKintai API', () => {
       headers: { Cookie: resetWorkerCookie },
     });
     expect(revoked.status).toBe(401);
+  });
+
+  it('slides an in-use session forward without passing its absolute lifetime', async () => {
+    const { cookie } = await setupAdmin();
+    const me = () => SELF.fetch(`${origin}/api/auth/me`, { headers: { Cookie: cookie } });
+    const sessionCheck = (condition: string) => env.DB.prepare(
+      `SELECT (${condition}) AS ok FROM sessions`,
+    ).first<{ ok: number }>();
+
+    // More than half of the 7-day TTL left: nothing to renew.
+    const fresh = await me();
+    expect(fresh.status).toBe(200);
+    expect(fresh.headers.get('set-cookie')).toBeNull();
+
+    // Less than half left: the same token comes back with a full TTL.
+    await env.DB.prepare("UPDATE sessions SET expires_at = datetime('now', '+1 day')").run();
+    const renewed = await me();
+    expect(renewed.status).toBe(200);
+    const renewedCookie = renewed.headers.get('set-cookie') ?? '';
+    expect(renewedCookie.split(';', 1)[0]).toBe(cookie);
+    expect(Number(/Max-Age=(\d+)/.exec(renewedCookie)?.[1])).toBeGreaterThan(6 * 24 * 60 * 60);
+    expect((await sessionCheck("expires_at > datetime('now', '+6 days')"))?.ok).toBe(1);
+
+    // Near the absolute lifetime the extension stops at created_at + 30 days.
+    await env.DB.prepare(
+      "UPDATE sessions SET created_at = datetime('now', '-29 days'), expires_at = datetime('now', '+1 hour')",
+    ).run();
+    expect((await me()).status).toBe(200);
+    expect((await sessionCheck(
+      "expires_at > datetime('now', '+23 hours') AND expires_at <= datetime('now', '+1 day', '+1 minute')",
+    ))?.ok).toBe(1);
+
+    // Past it, the session runs out on its current expiry.
+    await env.DB.prepare(
+      "UPDATE sessions SET created_at = datetime('now', '-31 days'), expires_at = datetime('now', '+1 hour')",
+    ).run();
+    const beyond = await me();
+    expect(beyond.status).toBe(200);
+    expect(beyond.headers.get('set-cookie')).toBeNull();
+    expect((await sessionCheck("expires_at <= datetime('now', '+1 hour')"))?.ok).toBe(1);
   });
 
   it('returns JSON 404 and API security headers', async () => {
