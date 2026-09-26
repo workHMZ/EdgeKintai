@@ -72,6 +72,7 @@ function placeholderAttendance(
     memo: '',
     created_at: '',
     updated_at: '',
+    revision: 0,
   };
 }
 

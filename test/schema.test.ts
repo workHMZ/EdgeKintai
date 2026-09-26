@@ -27,9 +27,10 @@ async function indexColumns(index: string): Promise<string[]> {
 }
 
 describe('D1 final schema', () => {
-  it('uses one migration and creates the complete 2.0 schema', async () => {
+  it('applies additive migrations and creates the complete schema', async () => {
     expect(env.TEST_MIGRATIONS.map((migration) => migration.name)).toEqual([
       '0001_schema.sql',
+      '0002_attendance_revision.sql',
     ]);
     expect(env.TEST_MIGRATIONS[0]?.queries.join('\n')).toContain(
       'CREATE TRIGGER users_preserve_last_admin_delete',
@@ -98,6 +99,7 @@ describe('D1 final schema', () => {
       'memo',
       'created_at',
       'updated_at',
+      'revision',
     ]);
     expect(await columnNames('sessions')).toEqual([
       'token_id',

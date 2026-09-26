@@ -32,6 +32,16 @@ Free プランだけで動作し、R2 や外部データベースは不要。
 - **堅牢なセキュリティ**: PBKDF2-SHA-256 パスワードハッシュ、セッションダイジェスト管理、レートリミット、CSRF 防御
 - **PWA 対応**: ホーム画面への追加、iOS セーフエリア対応、ダーク／ライトテーマ切り替え
 
+### Safari / iPhone の互換性
+
+- 年・月は個別の標準 `select` を使用し、デスクトップ Safari の月入力 UI に依存しません。
+- ネイティブ時刻ピッカーの操作中は現在時刻を上書きしません。バックグラウンドから戻った際の再取得でも、勤務記録が変わっていなければ入力中の勤務区分・休憩時間を保持します。
+- Excel 作成後はファイル名付きのダウンロードリンクを表示します。通信待ちでユーザー操作の有効期間が切れた場合や、自動ダウンロードをキャンセルした場合も、このリンクから保存できます。
+- ホーム画面起動時の上部と、横向き時のダイアログにもセーフエリアを適用します。拡大操作を制限する viewport 設定は使用しません。
+- 未保存確認はブラウザの `beforeunload` に依存します。iOS がバックグラウンドのタブを終了する場合など、確認が表示されず入力が失われる場合があります。
+
+互換性の確認基準は [Safari 27.0 の WebKit リリース情報](https://webkit.org/blog/18325/webkit-features-for-safari-27-0/)、[User Activation API](https://webkit.org/blog/13862/the-user-activation-api/)、[セーフエリアの公式解説](https://webkit.org/blog/7929/designing-websites-for-iphone-x/)です。レスポンシブ表示の検証は、実機 iPhone のキーボード・ダウンロード・ホーム画面起動の検証とは区別します。
+
 ---
 
 ## デプロイ
@@ -62,7 +72,7 @@ npm run deploy:cf
 | 設定 | 値 |
 |---|---|
 | Production branch | `main` |
-| Build command | `npm run build` |
+| Build command | `npm run verify` |
 | Deploy command | `npm run deploy` |
 | Build variable | `NODE_VERSION=24.11.0` |
 
@@ -121,7 +131,8 @@ npm run dev
 │   ├── excel.js          # ブラウザ内 Excel 生成（遅延読み込み）
 │   └── styles.css
 ├── migrations/
-│   └── 0001_schema.sql   # D1 スキーマ（単一ファイル）
+│   ├── 0001_schema.sql   # 初期スキーマ（適用済みファイルは変更しない）
+│   └── 0002_attendance_revision.sql # 編集競合の検出
 ├── scripts/              # デプロイヘルパー・テストスクリプト
 ├── test/                 # Vitest テスト
 ├── wrangler.jsonc        # Workers 設定
@@ -151,3 +162,19 @@ npm run dev
 ## License
 
 [MIT](./LICENSE)
+
+
+### 既存環境の更新
+
+適用済みの `0001_schema.sql` は変更せず、新しい migration を追加します。
+Workers Builds は Build command を `npm run verify`、Deploy command を `npm run deploy` に設定してください。
+`0002_attendance_revision.sql` は既存の勤務記録を保持したまま編集バージョンを追加します。
+更新直後は開いたままの画面を再読み込みしてください。古い画面からの保存は 428 で拒否されます。
+
+勤務記録の編集・削除 API は、取得した `id` と `revision` による `If-Match: "id:revision"` が必要です。
+新規作成は `If-None-Match: *` を指定します。競合時の 412 は自動再送せず、最新の内容を確認してください。
+画面では入力中の内容を保持し、最新データの再読み込み前に破棄の確認を行います。
+
+パスワード保存の現在の反復回数は OWASP 推奨値を満たしていません。
+既存パスワードを変更せず、未登録ユーザーの照合負荷のみ新規ハッシュと揃えています。
+認証方式の変更や反復回数の引き上げは、Workers Free の実測 CPU と復旧手順を確認してから行ってください。

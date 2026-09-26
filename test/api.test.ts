@@ -22,6 +22,18 @@ async function jsonRequest(
     Origin: requestOrigin,
   });
   if (cookie) headers.set('Cookie', cookie);
+  // Simulate an editor that reads the current version before each normal write.
+  // Concurrency tests below use explicit headers to retain stale snapshots.
+  const attendanceDate = /^\/api\/attendance\/(\d{4})-(\d{2})-(\d{2})$/.exec(path);
+  if (cookie && attendanceDate && ['PUT', 'DELETE'].includes(method)) {
+    const monthResponse = await SELF.fetch(`${origin}/api/attendance/${attendanceDate[1]}/${Number(attendanceDate[2])}`, {
+      headers: { Cookie: cookie },
+    });
+    const data = await monthResponse.json<{ records?: Array<{ id: number; revision: number; work_date: string }> }>();
+    const record = data.records?.find((item) => item.work_date === path.slice(-10) && item.id > 0);
+    if (record) headers.set('If-Match', `"${record.id}:${record.revision}"`);
+    else headers.set('If-None-Match', '*');
+  }
   return SELF.fetch(`${origin}${path}`, {
     method,
     headers,
@@ -1209,5 +1221,81 @@ describe('EdgeKintai API', () => {
       "SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'initial_setup'",
     ).first<{ count: number }>();
     expect(setupAudit?.count).toBe(1);
+  });
+});
+
+
+describe('Attendance optimistic concurrency and memo validation', () => {
+  async function write(cookie: string, method: string, tag?: string, body: Record<string, unknown> = { work_type: 'holiday' }, date = '2026-07-08') {
+    const headers: Record<string, string> = { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' };
+    if (tag === '*') headers['If-None-Match'] = '*';
+    else if (tag) headers['If-Match'] = tag;
+    return SELF.fetch(`${origin}/api/attendance/${date}`, {
+      method, headers, body: method === 'DELETE' ? undefined : JSON.stringify(body),
+    });
+  }
+
+  async function savedTag(response: Response) {
+    expect(response.status).toBe(200);
+    const { record } = await response.json<{ record: { id: number; revision: number } }>();
+    return `"${record.id}:${record.revision}"`;
+  }
+
+  it('rejects stale saves and deletes without changing newer data or adding audit events', async () => {
+    const { cookie } = await setupAdmin();
+    const original = await savedTag(await write(cookie, 'PUT', '*', { work_type: 'office', clock_in: '10:00', clock_out: '19:00' }));
+    const updated = await savedTag(await write(cookie, 'PUT', original, { clock_out: '20:00', memo: 'new' }));
+    expect(updated).not.toBe(original);
+    expect((await write(cookie, 'PUT', original, { clock_out: '19:00', memo: 'stale' })).status).toBe(412);
+    expect((await write(cookie, 'DELETE', original)).status).toBe(412);
+    expect(await env.DB.prepare("SELECT clock_out, memo, revision FROM attendance WHERE work_date = '2026-07-08'").first()).toMatchObject({ clock_out: '20:00', memo: 'new', revision: 2 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE entity_type = 'attendance'").first()).toMatchObject({ count: 2 });
+  });
+
+  it('requires a precondition and permits only one concurrent create or update', async () => {
+    const { cookie } = await setupAdmin();
+    expect((await write(cookie, 'PUT')).status).toBe(428);
+    expect((await write(cookie, 'DELETE')).status).toBe(428);
+    const creates = await Promise.all([write(cookie, 'PUT', '*'), write(cookie, 'PUT', '*')]);
+    expect(creates.map((r) => r.status).sort()).toEqual([200, 412]);
+    const tag = await savedTag(creates.find((r) => r.status === 200)!);
+    const updates = await Promise.all([
+      write(cookie, 'PUT', tag, { memo: 'first' }), write(cookie, 'PUT', tag, { memo: 'second' }),
+    ]);
+    expect(updates.map((r) => r.status).sort()).toEqual([200, 412]);
+  });
+
+  it('does not resurrect a deleted row or accept a tag from before recreation', async () => {
+    const { cookie } = await setupAdmin();
+    const old = await savedTag(await write(cookie, 'PUT', '*'));
+    expect((await write(cookie, 'DELETE', old)).status).toBe(200);
+    expect((await write(cookie, 'PUT', old)).status).toBe(412);
+    const recreated = await savedTag(await write(cookie, 'PUT', '*'));
+    expect(recreated).not.toBe(old);
+    expect((await write(cookie, 'PUT', old)).status).toBe(412);
+    expect((await write(cookie, 'DELETE', old)).status).toBe(412);
+    expect((await write(cookie, 'DELETE', recreated)).status).toBe(200);
+  });
+
+  it('changes the version on clock-out so an earlier editor cannot undo the punch', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-25T10:00:00+09:00'));
+    const { cookie } = await setupAdmin();
+    const created = await jsonRequest('/api/attendance/clock-in', 'POST', { clock_in: '09:00' }, cookie);
+    const tag = await savedTag(created);
+    const closed = await jsonRequest('/api/attendance/clock-out', 'POST', { clock_out: '10:00', break_minutes: 0 }, cookie);
+    expect(await savedTag(closed)).not.toBe(tag);
+    expect((await write(cookie, 'PUT', tag, { clock_out: null }, todayJST())).status).toBe(412);
+  });
+
+  it('preserves multiline notes, normalizes CRLF and rejects other controls accurately', async () => {
+    const { cookie } = await setupAdmin();
+    const tag = await savedTag(await write(cookie, 'PUT', '*', { work_type: 'holiday', memo: '午前会議\r\n午後作業' }));
+    expect(await env.DB.prepare("SELECT memo FROM attendance WHERE work_date = '2026-07-08'").first()).toMatchObject({ memo: '午前会議\n午後作業' });
+    const control = await write(cookie, 'PUT', tag, { memo: 'bad\u0000note' });
+    expect(control.status).toBe(400);
+    expect(await control.json()).toMatchObject({ error: '備考に無効な文字が含まれています' });
+    expect((await write(cookie, 'PUT', tag, { memo: 'あ'.repeat(501) })).status).toBe(400);
+    expect((await write(cookie, 'PUT', tag, { memo: '' })).status).toBe(200);
   });
 });

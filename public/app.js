@@ -18,6 +18,7 @@
   const WEEKDAYS = Object.freeze(['日', '月', '火', '水', '木', '金', '土']);
   const MONTH_TARGETS = Object.freeze(['calendar', 'summary', 'admin']);
   const MAX_SHIFT_MINUTES = 18 * 60;
+  const MONTH_CACHE_TTL_MS = 30_000;
   const DEFAULT_CONFIG = Object.freeze({
     timezone: 'Asia/Tokyo',
     default_break_minutes: 60,
@@ -55,6 +56,7 @@
   };
 
   let clockTimeEdited = false;
+  let editorSnapshot = null;
 
   class ApiError extends Error {
     constructor(message, status, data) {
@@ -183,22 +185,25 @@
     byId('copy-summary-button')?.addEventListener('click', handleCopySummary);
     byId('print-summary-button')?.addEventListener('click', (event) => {
       event.preventDefault();
+      if (!isSummaryReady()) return;
       byId('print-summary-button')?.blur();
       window.setTimeout(() => {
-        window.print();
+        if (isSummaryReady()) window.print();
       }, 60);
     });
+    window.addEventListener('beforeprint', prepareSummaryPrint);
     window.addEventListener('afterprint', () => {
+      restoreSummaryPrint();
       byId('main-content')?.focus({ preventScroll: true });
     });
     window.addEventListener('pageshow', () => {
-      void handlePotentialDateRollover();
+      void refreshOnResume();
     });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
         // The system appearance may have switched (Auto) while in background.
         renderThemeChrome();
-        void handlePotentialDateRollover();
+        void refreshOnResume();
       }
     });
     byId('download-excel-button').addEventListener('click', handleExcelDownload);
@@ -218,6 +223,22 @@
     byId('record-one-way-fare').addEventListener('input', updateRecordFarePreview);
     byId('record-trip-type').addEventListener('change', updateRecordFarePreview);
     byId('record-form').addEventListener('submit', handleRecordSave);
+    byId('reload-record-button').addEventListener('click', async () => {
+      const date = state.editorRecord?.work_date;
+      if (!date || !window.confirm('入力内容を破棄して最新の記録を読み込みますか？')) return;
+      // Fetch first so a connection failure leaves the draft intact.
+      await openRecordEditor(date);
+    });
+    byId('summary-retry-button').addEventListener('click', () => void loadSummary(true));
+    byId('calendar-retry-button').addEventListener('click', () => void loadCalendar(true));
+    byId('summary-incomplete-only').addEventListener('change', () => {
+      if (isSummaryReady()) renderSummary(state.summary);
+    });
+    window.addEventListener('beforeunload', (event) => {
+      if (!hasUnsavedRecord()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
     byId('delete-record-button').addEventListener('click', handleRecordDelete);
 
     byId('admin-add-user-form').addEventListener('submit', handleAdminAddUser);
@@ -308,9 +329,10 @@
   }
 
   function showAuthentication(setupRequired) {
+    clearExcelDownload();
     // A modal left open (a session that expired mid-edit) sits in the top layer
     // above the login form and makes it inert, so it has to go first.
-    if (byId('record-dialog')?.open) closeRecordDialog();
+    if (byId('record-dialog')?.open) closeRecordDialog(true);
     if (byId('admin-user-dialog')?.open) closeAdminUserDialog();
     byId('app-view').hidden = true;
     byId('auth-view').hidden = false;
@@ -490,16 +512,27 @@
     byId('main-content').focus({ preventScroll: true });
   }
 
-  async function loadToday() {
+  async function loadToday(preserveDraft = false) {
     try {
       const raw = await api('/api/attendance/today');
-      state.today = normalizeToday(raw);
-      renderToday();
+      const next = normalizeToday(raw);
+      // Resume refreshes must not overwrite a form being filled in. Reset it
+      // only when the underlying shift changed, including on another device.
+      const unchanged = state.today && todayRecordKey(state.today) === todayRecordKey(next);
+      state.today = next;
+      renderToday(preserveDraft && unchanged);
       return true;
     } catch (error) {
       handleAuthenticatedError(error, '今日の記録を取得できませんでした。');
       return false;
     }
+  }
+
+  function todayRecordKey(today) {
+    return JSON.stringify([today.date, ...['record', 'active_record', 'stale_record'].map((key) => {
+      const record = today[key];
+      return record ? [record.id, record.revision] : null;
+    })]);
   }
 
   function normalizeToday(raw) {
@@ -591,7 +624,7 @@
     return svg;
   }
 
-  function renderToday() {
+  function renderToday(preserveDraft = false) {
     const today = state.today;
     const record = today.record;
     const activeRecord = today.active_record;
@@ -715,10 +748,12 @@
         ? record
         : null
     );
-    byId('clock-break').value = String(
-      punchRecord?.break_minutes ?? today.defaults.break_minutes
-    );
-    if (!record?.persisted) byId('clock-work-type').value = today.defaults.work_type;
+    if (!preserveDraft) {
+      byId('clock-break').value = String(
+        punchRecord?.break_minutes ?? today.defaults.break_minutes
+      );
+      if (!record?.persisted) byId('clock-work-type').value = today.defaults.work_type;
+    }
     updateClockForm();
   }
 
@@ -823,6 +858,7 @@
           await api(`/api/attendance/${encodeURIComponent(date)}`, {
             method: 'PUT',
             body: clearedNonWorkingRecord(type, ''),
+            headers: recordVersionHeaders(state.today?.record),
           });
         } else {
           const clockIn = clockActionTime();
@@ -888,14 +924,19 @@
   async function loadCalendar(force) {
     const version = ++calendarRequestVersion;
     const requestedMonth = state.calendarMonth;
+    state.calendarSummary = null;
+    byId('calendar-grid').replaceChildren();
+    setMonthStatus('calendar', '読み込み中…');
     try {
       const summary = await loadMonthData(requestedMonth, force);
       if (version !== calendarRequestVersion || requestedMonth !== state.calendarMonth) return true;
       state.calendarSummary = summary;
       renderCalendar(summary);
+      setMonthStatus('calendar', '最新の記録を表示しています。');
       return true;
     } catch (error) {
       if (version !== calendarRequestVersion) return true;
+      setMonthStatus('calendar', '読み込めませんでした。再試行してください。', true);
       handleAuthenticatedError(error, 'カレンダーを取得できませんでした。');
       return false;
     }
@@ -971,32 +1012,78 @@
         ? `${record.clock_in}–${record.clock_out || (stateType === 'active' ? '勤務中' : '未退')}`
         : record.holiday_name;
       if (note) button.append(createElement('span', { className: 'calendar-note', text: note }));
-      button.addEventListener('click', () => void openRecordEditor(date, summary));
+      button.addEventListener('click', () => void openRecordEditor(date));
       grid.append(button);
     }
 
     renderHolidaySourceNote(byId('calendar-holiday-source-note'), summary.holiday_data);
   }
 
+  function setMonthStatus(target, message, failed = false) {
+    byId(`${target}-load-status`).textContent = message;
+    byId(`${target}-retry-button`).hidden = !failed;
+  }
+
+  function isSummaryReady() {
+    return Boolean(state.summary
+      && state.summaryMonth === `${state.summary.year}-${String(state.summary.month).padStart(2, '0')}`);
+  }
+
+  function setSummaryActions(enabled) {
+    ['copy-summary-button', 'print-summary-button', 'summary-incomplete-only'].forEach((id) => {
+      byId(id).disabled = !enabled;
+    });
+  }
+
+  let printState = null;
+  function prepareSummaryPrint() {
+    if (printState || !isSummaryReady() || state.page !== 'summary') return;
+    const details = byId('summary-extra');
+    const filter = byId('summary-incomplete-only');
+    printState = { detailsOpen: details.open, incompleteOnly: filter.checked };
+    details.open = true;
+    filter.checked = false;
+    renderSummary(state.summary);
+  }
+
+  function restoreSummaryPrint() {
+    if (!printState) return;
+    byId('summary-extra').open = printState.detailsOpen;
+    byId('summary-incomplete-only').checked = printState.incompleteOnly;
+    printState = null;
+    if (isSummaryReady()) renderSummary(state.summary);
+  }
+
   let summaryRequestVersion = 0;
   async function loadSummary(force) {
     const version = ++summaryRequestVersion;
     const requestedMonth = state.summaryMonth;
+    state.summary = null;
+    setSummaryActions(false);
+    byId('summary-metrics').replaceChildren();
+    byId('summary-extra-metrics').replaceChildren();
+    byId('summary-table-body').replaceChildren();
+    byId('summary-print-month').textContent = '';
+    byId('holiday-source-note').textContent = '';
+    setMonthStatus('summary', '読み込み中…');
     try {
       const summary = await loadMonthData(requestedMonth, force);
       if (version !== summaryRequestVersion || requestedMonth !== state.summaryMonth) return true;
       state.summary = summary;
       renderSummary(summary);
+      setSummaryActions(true);
+      setMonthStatus('summary', '最新の記録を表示しています。');
       return true;
     } catch (error) {
       if (version !== summaryRequestVersion) return true;
+      setMonthStatus('summary', '読み込めませんでした。再試行してください。', true);
       handleAuthenticatedError(error, '月次集計を取得できませんでした。');
       return false;
     }
   }
 
   function renderSummary(summary) {
-    const [year, month] = splitMonth(state.summaryMonth);
+    const { year, month } = summary;
     const monthText = `${year}年${String(month).padStart(2, '0')}月`;
     const employeeName = state.user?.display_name || state.user?.username || '氏名未設定';
     const printMonth = byId('summary-print-month');
@@ -1006,22 +1093,27 @@
     if (printUser) printUser.textContent = `氏名: ${employeeName}`;
     if (printGen) printGen.textContent = `出力日時: ${formatDateTime(new Date())}`;
 
+    const primaryMetrics = [
+      ['総実働', formatMinutes(summary.total_work_minutes)],
+      ['勤務日数', `${summary.office_days + summary.remote_days}日`],
+      ['要確認', `${summary.incomplete_days}件`],
+    ];
     const metrics = [
       ['出社', `${summary.office_days}日`],
       ['在宅', `${summary.remote_days}日`],
       ['有給', `${summary.paid_leave_days}日`],
       ['欠勤', `${summary.absent_days}日`],
       ['所定勤務日数', `${summary.scheduled_work_days || 0}日`],
-      ['総実働', formatMinutes(summary.total_work_minutes)],
       ['会社基準超過', formatMinutes(summary.overtime_minutes)],
       ['交通費', money(summary.total_transport_fee)],
     ];
-    const container = byId('summary-metrics');
-    container.replaceChildren(...metrics.map(([label, value]) => {
+    const metricCard = ([label, value]) => {
       const card = createElement('div', { className: 'metric-card' });
       card.append(createElement('span', { text: label }), createElement('strong', { text: value }));
       return card;
-    }));
+    };
+    byId('summary-metrics').replaceChildren(...primaryMetrics.map(metricCard));
+    byId('summary-extra-metrics').replaceChildren(...metrics.map(metricCard));
 
     const today = todayIso();
     const body = byId('summary-table-body');
@@ -1030,6 +1122,7 @@
       const row = document.createElement('tr');
       const dateStr = record.work_date;
       const stateType = attendanceState(record, dateStr, today);
+      if (byId('summary-incomplete-only').checked && !['incomplete', 'missing'].includes(stateType)) continue;
 
       if (stateType === 'incomplete' || stateType === 'missing') {
         row.classList.add('is-incomplete-row');
@@ -1074,12 +1167,22 @@
         record.persisted && record.work_type === 'office' ? tripTypeLabel(record.transport_trip_type) : '',
         record.persisted && record.work_type === 'office' ? money(record.transport_fee) : '',
       ];
-      values.forEach((value) => row.append(createElement('td', { text: value })));
+      values.forEach((value, index) => {
+        const cell = createElement('td', { text: index === 0 ? '' : value });
+        if (index === 0) {
+          const editButton = createElement('button', { className: 'text-button-link', text: value });
+          editButton.type = 'button';
+          editButton.setAttribute('aria-label', `${formatJapaneseDate(dateStr)}の記録を編集`);
+          editButton.addEventListener('click', () => void openRecordEditor(dateStr));
+          cell.append(editButton);
+        }
+        row.append(cell);
+      });
       body.append(row);
     }
-    if (!summary.records.length) {
+    if (!body.children.length) {
       const row = document.createElement('tr');
-      const cell = createElement('td', { className: 'empty-table-cell', text: '記録がありません。' });
+      const cell = createElement('td', { className: 'empty-table-cell', text: byId('summary-incomplete-only').checked ? '確認が必要な記録はありません。' : '記録がありません。' });
       cell.colSpan = 11;
       row.append(cell);
       body.append(row);
@@ -1133,12 +1236,17 @@
   }
 
   async function handleExcelDownload() {
+    if (!state.user) return;
+    clearExcelDownload();
+    const version = excelDownloadVersion;
+    const requestedMonth = state.summaryMonth;
     const button = byId('download-excel-button');
     await withBusy(button, '作成中…', async () => {
       try {
         await ensureExcelLibrary();
-        const [year, month] = splitMonth(state.summaryMonth);
+        const [year, month] = splitMonth(requestedMonth);
         const raw = await api(`/api/export/${year}/${month}`);
+        if (version !== excelDownloadVersion || !state.user || requestedMonth !== state.summaryMonth) return;
         const source = { ...unwrap(raw) };
         if (!source.username) source.username = state.user.username;
         if (!source.employee_name) source.employee_name = state.user.display_name;
@@ -1151,7 +1259,7 @@
         const filename = window.KintaiExcel.filenameFor(source);
         downloadBlob(blob, filename);
         hapticFeedback();
-        toast('Excelを作成しました。', 'success');
+        toast('Excelを作成しました。保存されない場合はダウンロードリンクを押してください。', 'success');
       } catch (error) {
         handleAuthenticatedError(error, 'Excelを作成できませんでした。');
       }
@@ -1159,9 +1267,9 @@
   }
 
   async function handleCopySummary() {
-    if (!state.summary) return;
+    if (!isSummaryReady()) return;
     const s = state.summary;
-    const [year, month] = splitMonth(state.summaryMonth);
+    const { year, month } = s;
     const name = state.user?.display_name || state.user?.username || '氏名未設定';
     const lines = [
       `【${year}年${String(month).padStart(2, '0')}月 勤怠概要】`,
@@ -1302,7 +1410,7 @@
     });
   }
 
-  async function openRecordEditor(date, providedSummary) {
+  async function openRecordEditor(date) {
     const valid = validDate(date);
     if (!valid) {
       toast('日付が不正です。', 'error');
@@ -1310,11 +1418,13 @@
     }
     try {
       const monthValue = valid.slice(0, 7);
-      const summary = providedSummary || await loadMonthData(monthValue, false);
+      const summary = await loadMonthData(monthValue, true);
       const record = summary.records.find((item) => item.work_date === valid) || normalizeRecord({}, { date: valid });
       state.editorRecord = record;
       fillRecordDialog(record);
-      byId('record-dialog').showModal();
+      editorSnapshot = recordDraftSnapshot();
+      byId('record-conflict').hidden = true;
+      if (!byId('record-dialog').open) byId('record-dialog').showModal();
     } catch (error) {
       handleAuthenticatedError(error, '記録を開けませんでした。');
     }
@@ -1498,12 +1608,13 @@
 
     await withBusy(event.submitter, '保存中…', async () => {
       try {
-        await api(`/api/attendance/${encodeURIComponent(date)}`, { method: 'PUT', body });
-        closeRecordDialog();
+        await api(`/api/attendance/${encodeURIComponent(date)}`, { method: 'PUT', body, headers: recordVersionHeaders() });
+        closeRecordDialog(true);
         invalidateMonth(date.slice(0, 7));
         await refreshVisibleData(date);
         toast('勤務記録を保存しました。', 'success');
       } catch (error) {
+        if (error.status === 412) byId('record-conflict').hidden = false;
         handleAuthenticatedError(error, '勤務記録を保存できませんでした。');
       }
     });
@@ -1515,18 +1626,39 @@
     if (!window.confirm(`${formatJapaneseDate(date)}の勤務記録を削除しますか？`)) return;
     await withBusy(byId('delete-record-button'), '削除中…', async () => {
       try {
-        await api(`/api/attendance/${encodeURIComponent(date)}`, { method: 'DELETE' });
-        closeRecordDialog();
+        await api(`/api/attendance/${encodeURIComponent(date)}`, { method: 'DELETE', headers: recordVersionHeaders() });
+        closeRecordDialog(true);
         invalidateMonth(date.slice(0, 7));
         await refreshVisibleData(date);
         toast('勤務記録を削除しました。', 'success');
       } catch (error) {
+        if (error.status === 412) byId('record-conflict').hidden = false;
         handleAuthenticatedError(error, '勤務記録を削除できませんでした。');
       }
     });
   }
 
-  function closeRecordDialog() {
+  function recordVersionHeaders(record = state.editorRecord) {
+    return record?.persisted
+      ? { 'If-Match': `"${record.id}:${record.revision}"` }
+      : { 'If-None-Match': '*' };
+  }
+
+  function recordDraftSnapshot() {
+    return JSON.stringify([
+      'record-work-type', 'record-clock-in', 'record-clock-out', 'record-break',
+      'record-one-way-fare', 'record-trip-type', 'record-transport-mode',
+      'record-transport-origin', 'record-transport-destination', 'record-memo',
+    ].map((id) => byId(id).value));
+  }
+
+  function hasUnsavedRecord() {
+    return Boolean(state.editorRecord && editorSnapshot !== null && editorSnapshot !== recordDraftSnapshot());
+  }
+
+  function closeRecordDialog(force = false) {
+    if (force !== true && hasUnsavedRecord() && !window.confirm('変更を保存せずに閉じますか？')) return;
+    editorSnapshot = null;
     const dialog = byId('record-dialog');
     dialog?.querySelector('.dialog-toast-region')?.replaceChildren();
     if (dialog?.open) dialog.close();
@@ -1841,20 +1973,23 @@
     // A cached entry is either a resolved summary or an in-flight promise; both
     // are reusable when not forcing. A forced reload must never adopt a request
     // that started before the write it is meant to reflect.
-    if (!force && cached) return cached;
+    if (!force && cached && (cached.promise || Date.now() - cached.fetchedAt < MONTH_CACHE_TTL_MS)) {
+      return cached.promise || cached.value;
+    }
     if (force) state.monthCache.delete(valid);
     const [year, month] = splitMonth(valid);
     const loadPromise = api(`/api/attendance/${year}/${month}`)
       .then((raw) => normalizeMonthlySummary(raw, year, month));
-    state.monthCache.set(valid, loadPromise);
+    const entry = { promise: loadPromise };
+    state.monthCache.set(valid, entry);
     try {
       const summary = await loadPromise;
-      if (state.monthCache.get(valid) === loadPromise) {
-        state.monthCache.set(valid, summary);
+      if (state.monthCache.get(valid) === entry) {
+        state.monthCache.set(valid, { value: summary, fetchedAt: Date.now() });
       }
       return summary;
     } catch (error) {
-      if (state.monthCache.get(valid) === loadPromise) {
+      if (state.monthCache.get(valid) === entry) {
         state.monthCache.delete(valid);
       }
       throw error;
@@ -1906,6 +2041,7 @@
     const computedMinutes = clockIn && clockOut ? calculateWorkMinutes(clockIn, clockOut, breakMinutes) : null;
     return {
       id: boundedInteger(source.id, 0, 0, Number.MAX_SAFE_INTEGER),
+      revision: boundedInteger(source.revision, 0, 0, Number.MAX_SAFE_INTEGER),
       work_date: date,
       work_type: type,
       clock_in: clockIn,
@@ -1958,6 +2094,7 @@
 
   function setMonth(target, value, force) {
     if (!MONTH_TARGETS.includes(target)) return;
+    if (target === 'summary' && value !== state.summaryMonth) clearExcelDownload();
     state[`${target}Month`] = value;
     renderMonthControl(target);
     if (target === 'calendar') void loadCalendar(force);
@@ -1998,6 +2135,7 @@
 
   function invalidateMonth(monthValue) {
     state.monthCache.delete(monthValue);
+    if (monthValue === state.summaryMonth) clearExcelDownload();
   }
 
   async function api(path, options) {
@@ -2379,6 +2517,42 @@
     clockTimeEdited = false;
   }
 
+  let resumeRequest = null;
+  let lastResumeAt = 0;
+
+  async function refreshOnResume() {
+    syncClockActionTime();
+    if (!state.user) return true;
+    if (resumeRequest) return resumeRequest;
+    if (todayIso() === lastObservedDate && Date.now() - lastResumeAt < MONTH_CACHE_TTL_MS) return true;
+    resumeRequest = (async () => {
+      let ok;
+      if (todayIso() !== lastObservedDate) {
+        ok = await handlePotentialDateRollover();
+      } else {
+        const results = [await loadToday(true)];
+        if (state.page === 'calendar') results.push(await loadCalendar(true));
+        if (state.page === 'summary') results.push(await loadSummary(true));
+        if (state.page === 'admin') await loadAdminOverview();
+        ok = results.every(Boolean);
+      }
+      if (ok) lastResumeAt = Date.now();
+      return ok;
+    })();
+    try {
+      return await resumeRequest;
+    } finally {
+      resumeRequest = null;
+    }
+  }
+
+  function syncClockActionTime() {
+    const input = byId('clock-in-time');
+    // Native time pickers may commit only when dismissed. Do not reset their
+    // pending selection on every tick while the control still has focus.
+    if (!clockTimeEdited && document.activeElement !== input) input.value = nowTime();
+  }
+
   let lastObservedDate = todayIso();
 
   async function handlePotentialDateRollover() {
@@ -2434,6 +2608,8 @@
   function startClock() {
     lastObservedDate = todayIso();
     const tick = () => {
+      if (document.visibilityState === 'hidden') return;
+      syncClockActionTime();
       const parts = dateTimeParts();
       byId('current-time').textContent = `${parts.hour}:${parts.minute}:${parts.second}`;
       const activeRecord = state.today?.active_record;
@@ -2584,18 +2760,29 @@
     return error instanceof Error && error.message ? safeString(error.message, fallback) : fallback;
   }
 
+  let excelDownloadUrl = null;
+  let excelDownloadVersion = 0;
+
+  function clearExcelDownload() {
+    excelDownloadVersion += 1;
+    if (excelDownloadUrl) URL.revokeObjectURL(excelDownloadUrl);
+    excelDownloadUrl = null;
+    byId('excel-download-ready').hidden = true;
+    byId('excel-download-link').removeAttribute('href');
+  }
+
   function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
+    excelDownloadUrl = URL.createObjectURL(blob);
+    const anchor = byId('excel-download-link');
+    anchor.href = excelDownloadUrl;
     anchor.download = filename;
-    anchor.rel = 'noopener';
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    // iOS Safari first asks whether to download and only reads the blob after
-    // the user confirms, so the URL has to outlive that prompt.
-    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    anchor.textContent = filename;
+    byId('excel-download-ready').hidden = false;
+    // Slow requests can outlive transient user activation in Safari. Keep a
+    // real link so another tap can save the file without fetching it again.
+    if (navigator.userActivation?.isActive !== false) anchor.click();
+    // Keep one URL until a new export, month change, edit or sign-out; a delayed
+    // iOS download prompt must not be left pointing at an expired URL.
   }
 
   function systemTheme() {

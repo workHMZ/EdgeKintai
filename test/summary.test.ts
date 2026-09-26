@@ -18,6 +18,7 @@ const testUser = {
 function createAttendanceRecord(partial: Partial<Attendance> & { work_date: string }): Attendance {
   return {
     id: 1,
+    revision: partial.revision ?? 1,
     user_id: 1,
     work_date: partial.work_date,
     work_type: partial.work_type ?? 'office',

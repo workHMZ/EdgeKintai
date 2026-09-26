@@ -97,8 +97,11 @@ function readConfiguration() {
   const migrationFiles = existsSync(migrationsPath)
     ? readdirSync(migrationsPath).filter((name) => name.endsWith('.sql')).sort()
     : [];
-  if (migrationFiles.length !== 1 || migrationFiles[0] !== '0001_schema.sql') {
-    throw new Error('2.0 必须且只能包含 migrations/0001_schema.sql');
+  if (
+    migrationFiles[0] !== '0001_schema.sql'
+    || migrationFiles.some((name, index) => !new RegExp(`^${String(index + 1).padStart(4, '0')}_[a-z0-9_]+\\.sql$`).test(name))
+  ) {
+    throw new Error('Migrations must start with 0001_schema.sql and use consecutive numbered SQL files');
   }
 
   if (/"cpu_ms"\s*:/.test(source)) {

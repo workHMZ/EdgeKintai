@@ -22,6 +22,7 @@ export interface User {
 
 export interface Attendance {
   id: number;
+  revision: number;
   user_id: number;
   work_date: string;
   work_type: WorkType;

@@ -1,19 +1,9 @@
 /**
- * Bounded by the Workers Free CPU budget of 10 ms per invocation, which every
- * `/api/*` request shares. PBKDF2 is the dominant cost on the login and
- * password-change paths: measured inside workerd, 100_000 iterations cost
- * ~5.8 ms on an Apple Silicon laptop, and Cloudflare's edge cores are slower
- * still, which puts a single login over budget. 50_000 halves that and leaves
- * headroom for the D1 round trips in the same request. It is also the floor
- * `parseStoredHash` accepts, so it stays inside the range this format was
- * designed for.
- *
- * Changing this number never invalidates an existing password: the iteration
- * count is stored inside each hash (`pbkdf2_sha256$<iterations>$<salt>$<hash>`)
- * and `verifyPassword` derives with the *stored* count, not this constant. Only
- * newly written hashes use the value below, so an already-deployed database
- * keeps working untouched. Raise it again if the Worker moves to a paid plan,
- * where the per-invocation CPU limit is configurable.
+ * Keep the existing stored format and work factor during this compatibility fix.
+ * 50,000 is below OWASP's current PBKDF2-SHA256 recommendation; local workerd
+ * timings do not establish edge CPU safety. Stronger password storage or an
+ * external identity provider requires separate design and edge measurements.
+ * Existing hashes always retain their own iteration count.
  */
 const HASH_ITERATIONS = 50_000;
 const HASH_ALGORITHM = 'SHA-256';
@@ -25,7 +15,13 @@ export async function hashPassword(password: string): Promise<string> {
   return `${HASH_PREFIX}$${HASH_ITERATIONS}$${toHex(salt)}$${toHex(hash)}`;
 }
 
-export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+export async function verifyPassword(password: string, stored: string | null): Promise<boolean> {
+  if (stored === null) {
+    // Unknown users take the same derivation work as a newly stored password.
+    // There is no stored credential to accept, regardless of the derived bytes.
+    await derivePassword(password, new Uint8Array(16), HASH_ITERATIONS);
+    return false;
+  }
   const parsed = parseStoredHash(stored);
   if (!parsed) return false;
   const actual = await derivePassword(password, parsed.salt, parsed.iterations);

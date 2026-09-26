@@ -96,6 +96,18 @@ export function optionalString(value: unknown, label: string, maxLength: number)
   return normalized;
 }
 
+/** Preserve line breaks in notes without accepting other control characters. */
+export function memoValue(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new RequestValidationError('備考の形式が正しくありません');
+  const normalized = value.normalize('NFKC').replace(/\r\n?/g, '\n').trim();
+  if (normalized.length > 500) throw new RequestValidationError('備考は最大500文字までです');
+  if (/\p{C}/u.test(normalized.replace(/\n/g, ''))) {
+    throw new RequestValidationError('備考に無効な文字が含まれています');
+  }
+  return normalized;
+}
+
 export function displayNameValue(value: unknown): string {
   const displayName = requiredString(value, '氏名', 1, 80);
   const visible = displayName.replace(/[\p{C}\p{Z}]/gu, '');

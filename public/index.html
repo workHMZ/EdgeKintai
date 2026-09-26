@@ -228,6 +228,7 @@
             </div>
           </div>
           <div class="panel calendar-panel">
+            <div class="data-status"><span id="calendar-load-status" role="status" aria-live="polite"></span><button id="calendar-retry-button" type="button" class="button button-sm" hidden>再試行</button></div>
             <div id="calendar-grid" class="calendar-grid" aria-label="月間勤務カレンダー"></div>
           </div>
           <p class="hint">日付を選ぶと、その日の勤務を補録・修正できます。</p>
@@ -260,7 +261,9 @@
             </div>
           </div>
 
-          <div id="summary-metrics" class="metric-grid"></div>
+          <div class="data-status"><span id="summary-load-status" role="status" aria-live="polite"></span><button id="summary-retry-button" type="button" class="button button-sm" hidden>再試行</button></div>
+          <div id="summary-metrics" class="metric-grid summary-primary-metrics"></div>
+          <details id="summary-extra" class="summary-extra"><summary>勤務区分・交通費の内訳</summary><div id="summary-extra-metrics" class="metric-grid"></div></details>
 
           <section class="panel">
             <div class="panel-heading">
@@ -269,6 +272,7 @@
                 <h2>日別明細</h2>
               </div>
               <div class="button-row">
+                <label class="summary-filter"><input id="summary-incomplete-only" type="checkbox">要確認のみ</label>
                 <button id="copy-summary-button" class="button button-sm button-secondary icon-only" type="button" aria-label="サマリーをコピー" title="サマリーをコピー（Slack / メール用）">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
                 </button>
@@ -281,6 +285,9 @@
                 </button>
               </div>
             </div>
+            <p id="excel-download-ready" class="download-ready" role="status" hidden>
+              Excelの準備ができました：<a id="excel-download-link" download rel="noopener"></a>
+            </p>
             <div class="table-scroll">
               <table>
                 <thead>
@@ -508,6 +515,10 @@
         </div>
         <div id="record-date-context" class="date-context"></div>
         <input id="record-date" type="hidden">
+        <div id="record-conflict" class="record-conflict" role="alert" hidden>
+          <p>ほかの画面で記録が変更されました。入力内容は保持しています。必要な内容を控えてから、最新の記録を読み込んでください。</p>
+          <button id="reload-record-button" type="button" class="button button-sm">最新の記録を読み込む</button>
+        </div>
 
         <div class="field-grid">
           <div class="field">

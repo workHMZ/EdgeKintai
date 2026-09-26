@@ -26,6 +26,10 @@ async function legacyStoredHash(password: string, iterations: number): Promise<s
 }
 
 describe('password hashing', () => {
+  it('performs dummy verification without accepting an unknown user', async () => {
+    await expect(verifyPassword(PASSWORD, null)).resolves.toBe(false);
+  });
+
   it('still verifies hashes written with a different iteration count', async () => {
     // Every password stored by a deployment running an earlier release carries
     // its own iteration count. Lowering HASH_ITERATIONS must never lock those

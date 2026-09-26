@@ -223,13 +223,6 @@ export async function revokeSession(
   await env.DB.prepare('DELETE FROM sessions WHERE token_id = ?').bind(tokenHash).run();
 }
 
-export async function revokeAllUserSessions(
-  env: CloudflareBindings,
-  userId: number,
-): Promise<void> {
-  await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
-}
-
 export const authMiddleware = createMiddleware<AuthEnv>(async (c, next) => {
   const token = getSessionToken(c.req.raw);
   const user = token ? await getSessionUser(c.env, token) : null;

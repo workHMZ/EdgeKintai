@@ -19,6 +19,7 @@ import {
   dateValue,
   nullableBoundedInteger,
   nullableTime,
+  memoValue,
   optionalString,
   readJsonObject,
   RequestValidationError,
@@ -30,6 +31,19 @@ import {
 
 const attendance = new Hono<AuthEnv>();
 attendance.use('*', authMiddleware);
+
+const recordConflict = 'ほかの画面で記録が変更されました。入力内容を確認し、最新の記録を読み込んでください';
+
+function recordTag(record: Pick<Attendance, 'id' | 'revision'>): string {
+  // The row ID prevents a deleted/recreated record from reusing an old version.
+  return `"${record.id}:${record.revision}"`;
+}
+
+function matchesRecord(request: Request, record: Attendance | null): boolean {
+  return record
+    ? request.headers.get('If-Match') === recordTag(record) && !request.headers.has('If-None-Match')
+    : request.headers.get('If-None-Match') === '*' && !request.headers.has('If-Match');
+}
 
 function fareTotal(oneWayFare: number, tripType: TransportTripType): number {
   return oneWayFare * (tripType === 'round_trip' ? 2 : 1);
@@ -227,7 +241,8 @@ attendance.post('/clock-in', async (c) => {
        transport_mode = excluded.transport_mode,
        transport_origin = excluded.transport_origin,
        transport_destination = excluded.transport_destination,
-       updated_at = datetime('now')
+       updated_at = datetime('now'),
+       revision = attendance.revision + 1
      WHERE attendance.clock_in IS NULL AND attendance.clock_out IS NULL
      RETURNING *`,
   ).bind(
@@ -300,13 +315,13 @@ attendance.post('/clock-out', async (c) => {
 
   const record = await c.env.DB.prepare(
     `UPDATE attendance
-     SET clock_out = ?, break_minutes = ?, updated_at = datetime('now')
+     SET clock_out = ?, break_minutes = ?, updated_at = datetime('now'), revision = revision + 1
      WHERE user_id = ? AND work_date = ?
        AND clock_in IS NOT NULL AND clock_out IS NULL
-       AND work_type IN ('office', 'remote')
+       AND work_type IN ('office', 'remote') AND id = ? AND revision = ?
      RETURNING *`,
   )
-    .bind(clockOut, breakMinutes, user.id, openRecord.work_date)
+    .bind(clockOut, breakMinutes, user.id, openRecord.work_date, openRecord.id, openRecord.revision)
     .first<Attendance>();
 
   if (!record) return c.json({ error: '退勤記録が更新されました。画面を再読み込みしてください' }, 409);
@@ -340,6 +355,11 @@ attendance.put('/:date', async (c) => {
     .bind(user.id, date)
     .first<Attendance>();
 
+  if (!c.req.header('If-Match') && !c.req.header('If-None-Match')) {
+    return c.json({ error: '画面を再読み込みしてから記録を編集してください' }, 428);
+  }
+  if (!matchesRecord(c.req.raw, existing)) return c.json({ error: recordConflict }, 412);
+
   const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
   const defaults = getUserCommuteDefaults(c.env, user);
   const workType = workTypeValue(body.work_type, existing?.work_type ?? attendanceDefaults.work_type);
@@ -352,7 +372,7 @@ attendance.put('/:date', async (c) => {
     480,
     existing?.break_minutes ?? attendanceDefaults.break_minutes,
   );
-  const memo = optionalString(body.memo, '備考', 500) ?? existing?.memo ?? '';
+  const memo = memoValue(body.memo) ?? existing?.memo ?? '';
   const preserveExistingCommute = existing?.work_type === 'office';
   let tripType = tripTypeValue(
     body.transport_trip_type,
@@ -455,7 +475,8 @@ attendance.put('/:date', async (c) => {
        user_id, work_date, work_type, clock_in, clock_out, break_minutes,
        transport_fee, transport_one_way_fee, transport_trip_type,
        transport_mode, transport_origin, transport_destination, memo
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE ? = 0 OR EXISTS (SELECT 1 FROM attendance WHERE id = ? AND revision = ?)
      ON CONFLICT(user_id, work_date) DO UPDATE SET
        work_type = excluded.work_type,
        clock_in = excluded.clock_in,
@@ -468,7 +489,9 @@ attendance.put('/:date', async (c) => {
        transport_origin = excluded.transport_origin,
        transport_destination = excluded.transport_destination,
        memo = excluded.memo,
-       updated_at = datetime('now')
+       updated_at = datetime('now'),
+       revision = attendance.revision + 1
+     WHERE attendance.id = ? AND attendance.revision = ?
      RETURNING *`,
   ).bind(
     user.id,
@@ -484,20 +507,30 @@ attendance.put('/:date', async (c) => {
     transportOrigin,
     transportDestination,
     memo,
+    existing?.id ?? 0,
+    existing?.id ?? 0,
+    existing?.revision ?? 0,
+    existing?.id ?? 0,
+    existing?.revision ?? 0,
   );
   const record = await upsert.first<Attendance>();
+  if (!record) return c.json({ error: recordConflict }, 412);
   return c.json({ success: true, record });
 });
 
 attendance.delete('/:date', async (c) => {
   const user = c.get('user');
   const date = dateValue(c.req.param('date'));
+  const tag = c.req.header('If-Match');
+  if (!tag) return c.json({ error: '画面を再読み込みしてから記録を削除してください' }, 428);
+  const match = /^"([1-9][0-9]*):([1-9][0-9]*)"$/.exec(tag);
+  if (!match || c.req.header('If-None-Match')) return c.json({ error: recordConflict }, 412);
   const existing = await c.env.DB.prepare(
-    'DELETE FROM attendance WHERE user_id = ? AND work_date = ? RETURNING *',
+    'DELETE FROM attendance WHERE user_id = ? AND work_date = ? AND id = ? AND revision = ? RETURNING *',
   )
-    .bind(user.id, date)
+    .bind(user.id, date, Number(match[1]), Number(match[2]))
     .first<Attendance>();
-  if (!existing) return c.json({ error: 'この日に削除できる記録はありません' }, 404);
+  if (!existing) return c.json({ error: recordConflict }, 412);
   return c.json({ success: true });
 });
 

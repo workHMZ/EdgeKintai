@@ -1,8 +1,29 @@
 // @ts-expect-error Vitest raw import
 import appSource from '../public/app.js?raw';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 interface TestHooks {
+  handleExcelDownload: () => Promise<void>;
+  clearExcelDownload: () => void;
+  getRevokedDownloads: () => string[];
+  setUserActivation: (active: boolean) => void;
+  focusClockInput: () => void;
+  prepareSummaryPrint: () => void;
+  restoreSummaryPrint: () => void;
+  loadSummary: (force: boolean) => Promise<boolean>;
+  handleCopySummary: () => Promise<void>;
+  refreshOnResume: () => Promise<boolean>;
+  syncClockActionTime: () => void;
+  nowTime: () => string;
+  recordVersionHeaders: (record?: unknown) => Record<string, string>;
+  hasUnsavedRecord: () => boolean;
+  getCopied: () => string[];
+  setSummaryMonth: (month: string) => void;
+  setClockEdited: (edited: boolean) => void;
+  setEditor: (record: unknown) => void;
+
   attendanceState: (
     record: { persisted?: boolean; work_type?: string; clock_in?: string | null; clock_out?: string | null; day_of_week?: number; is_holiday?: boolean },
     date: string,
@@ -16,7 +37,7 @@ interface TestHooks {
     today: string,
     currentTime: string,
   ) => boolean;
-  loadToday: () => Promise<boolean>;
+  loadToday: (preserveDraft?: boolean) => Promise<boolean>;
   handlePotentialDateRollover: () => Promise<boolean>;
   withBusy: (
     button: { disabled: boolean; innerHTML: string; textContent: string } | null | undefined,
@@ -31,6 +52,12 @@ interface TestHooks {
   api: (path: string, options?: Record<string, unknown>) => Promise<unknown>;
   normalizeTimestampInput: (value: unknown) => unknown;
   getElement: (id: string) => {
+    href: string;
+    clicks: number;
+    open: boolean;
+    checked: boolean;
+    value: string;
+    disabled: boolean;
     hidden: boolean;
     className: string;
     textContent: string;
@@ -56,7 +83,26 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
     if (customApi) {
       api = customApi;
     }
+    cacheDOM();
     return {
+      handleExcelDownload,
+      clearExcelDownload,
+      getRevokedDownloads: () => URL.revoked,
+      setUserActivation: (active) => { navigator.userActivation.isActive = active; },
+      focusClockInput: () => { document.activeElement = byId('clock-in-time'); },
+      prepareSummaryPrint,
+      restoreSummaryPrint,
+      loadSummary,
+      handleCopySummary,
+      refreshOnResume,
+      syncClockActionTime,
+      nowTime,
+      recordVersionHeaders,
+      hasUnsavedRecord,
+      getCopied: () => navigator.copied,
+      setSummaryMonth: (m) => { state.summaryMonth = m; },
+      setClockEdited: (v) => { clockTimeEdited = v; },
+      setEditor: (v) => { state.editorRecord = v; editorSnapshot = recordDraftSnapshot(); },
       attendanceState,
       previousDate,
       calculateWorkMinutes,
@@ -87,7 +133,14 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
     const children: unknown[] = [];
     const classes = new Set<string>();
     return {
+      href: '',
+      clicks: 0,
+      click() { this.clicks++; },
+      closest: () => null,
       value: '',
+      disabled: false,
+      checked: false,
+      addEventListener: () => {},
       hidden: false,
       textContent: '',
       className: '',
@@ -108,9 +161,14 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
       },
       remove: () => {},
       setAttribute: () => {},
+      removeAttribute(name: string) { if (name === 'href') this.href = ''; },
     };
   };
   const mockWindow = {
+    KintaiExcel: {
+      createWorkbookBlob: () => new Blob(['test workbook']),
+      filenameFor: () => 'test.xlsx',
+    },
     matchMedia: () => ({ matches: false }),
     setTimeout: () => 0,
   };
@@ -121,6 +179,7 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: () => null,
+    querySelectorAll: () => [],
     createElement: () => createMockElement(),
     getElementById: (id: string) => {
       if (!elements.has(id)) elements.set(id, createMockElement());
@@ -128,8 +187,12 @@ function loadFrontendHooks(customApi?: (path: string) => Promise<unknown>): Test
     },
   };
 
-  const fn = new Function('window', 'document', 'navigator', 'location', 'customApi', `return ${instrumented}`);
-  const hooks = fn(mockWindow, mockDoc, { clipboard: {} }, { pathname: '/' }, customApi) as TestHooks;
+  const fn = new Function('window', 'document', 'navigator', 'location', 'customApi', 'URL', `return ${instrumented}`);
+  const copied: string[] = [];
+  const revoked: string[] = [];
+  const hooks = fn(mockWindow, mockDoc, { userActivation: { isActive: true }, copied, clipboard: { writeText: async (text: string) => { copied.push(text); } } }, { pathname: '/' }, customApi, {
+    revoked, createObjectURL: () => 'blob:test-workbook', revokeObjectURL: (url: string) => revoked.push(url),
+  }) as TestHooks;
   if (!hooks) throw new Error('Failed to load frontend hooks from public/app.js');
   return hooks;
 }
@@ -501,4 +564,169 @@ describe('Frontend Pure State Logic', () => {
     expect((await hooks.loadMonthData('2026-07', false)).total_work_minutes).toBe(200);
     expect(requests).toBe(2);
   });
+});
+
+
+describe('Frontend freshness and edit guards', () => {
+  it('does not overwrite a native time picker before its change is committed', () => {
+    const hooks = loadFrontendHooks();
+    const input = hooks.getElement('clock-in-time');
+    input.value = '09:45';
+    hooks.focusClockInput();
+    hooks.syncClockActionTime();
+    expect(input.value).toBe('09:45');
+  });
+
+  it('preserves a punch draft on resume until the underlying shift changes', async () => {
+    let record: unknown = null;
+    const hooks = loadFrontendHooks(async () => ({
+      date: '2026-09-25', record, defaults: { work_type: 'office', break_minutes: 60 },
+    }));
+    expect(await hooks.loadToday()).toBe(true);
+    hooks.getElement('clock-work-type').value = 'remote';
+    hooks.getElement('clock-break').value = '45';
+    expect(await hooks.loadToday(true)).toBe(true);
+    expect(hooks.getElement('clock-work-type').value).toBe('remote');
+    expect(hooks.getElement('clock-break').value).toBe('45');
+    record = { id: 1, revision: 2, work_date: '2026-09-25', work_type: 'office', clock_in: '10:00', clock_out: '19:00', break_minutes: 90 };
+    expect(await hooks.loadToday(true)).toBe(true);
+    expect(hooks.getElement('clock-break').value).toBe('60');
+    expect(hooks.getElement('clock-in-button').disabled).toBe(true);
+  });
+
+  it('keeps a real Excel link after user activation expires and releases it on invalidation', async () => {
+    const hooks = loadFrontendHooks(async () => ({ year: 2026, month: 9, records: [] }));
+    hooks.setUser({ id: 1, username: 'tester' });
+    hooks.setUserActivation(false);
+    await hooks.handleExcelDownload();
+    const link = hooks.getElement('excel-download-link');
+    expect(link.href).toBe('blob:test-workbook');
+    expect(link.clicks).toBe(0);
+    expect(hooks.getElement('excel-download-ready').hidden).toBe(false);
+    hooks.clearExcelDownload();
+    expect(link.href).toBe('');
+    expect(hooks.getRevokedDownloads()).toEqual(['blob:test-workbook']);
+    expect(hooks.getElement('excel-download-ready').hidden).toBe(true);
+    hooks.setUserActivation(true);
+    await hooks.handleExcelDownload();
+    expect(link.clicks).toBe(1);
+  });
+
+  it('discards a pending export if the user signs out or changes the month', async () => {
+    let release: (() => void) | undefined;
+    const hooks = loadFrontendHooks(async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { year: 2026, month: 9, records: [] };
+    });
+    hooks.setUser({ id: 1, username: 'tester' });
+    const download = hooks.handleExcelDownload();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    hooks.clearExcelDownload();
+    release!();
+    await download;
+    expect(hooks.getElement('excel-download-ready').hidden).toBe(true);
+    expect(hooks.getElement('excel-download-link').href).toBe('');
+  });
+
+  it('blocks copying during a month transition and after a failed load, then recovers', async () => {
+    let fail = false;
+    let release: (() => void) | undefined;
+    const hooks = loadFrontendHooks(async (path) => {
+      if (path.endsWith('/9')) {
+        await new Promise<void>((resolve) => { release = resolve; });
+        if (fail) throw new Error('offline');
+      }
+      return { year: 2026, month: path.endsWith('/9') ? 9 : 8, records: [], total_work_minutes: path.endsWith('/9') ? 60 : 9600 };
+    });
+    hooks.setSummaryMonth('2026-08');
+    expect(await hooks.loadSummary(false)).toBe(true);
+    await hooks.handleCopySummary();
+    expect(hooks.getCopied()[0]).toContain('2026年08月');
+    hooks.setSummaryMonth('2026-09');
+    fail = true;
+    const loading = hooks.loadSummary(false);
+    expect(hooks.getElement('copy-summary-button').disabled).toBe(true);
+    expect(hooks.getElement('summary-metrics').children).toHaveLength(0);
+    await hooks.handleCopySummary();
+    release!();
+    expect(await loading).toBe(false);
+    await hooks.handleCopySummary();
+    expect(hooks.getCopied()).toHaveLength(1);
+    expect(hooks.getElement('summary-retry-button').hidden).toBe(false);
+    fail = false;
+    const retry = hooks.loadSummary(true);
+    release!();
+    expect(await retry).toBe(true);
+    await hooks.handleCopySummary();
+    expect(hooks.getCopied()[1]).toContain('2026年09月');
+    expect(hooks.getCopied()[1]).toContain('1:00');
+    expect(hooks.getElement('print-summary-button').disabled).toBe(false);
+  });
+
+  it('expires resolved month data but shares in-flight reads', async () => {
+    let now = 100_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    let requests = 0;
+    const hooks = loadFrontendHooks(async () => ({ records: [], total_work_minutes: ++requests * 60 }));
+    const reads = await Promise.all([hooks.loadMonthData('2026-09', false), hooks.loadMonthData('2026-09', false)]);
+    expect(reads.map((r) => r.total_work_minutes)).toEqual([60, 60]);
+    expect(requests).toBe(1);
+    now += 30_001;
+    expect((await hooks.loadMonthData('2026-09', false)).total_work_minutes).toBe(120);
+    expect(requests).toBe(2);
+  });
+
+  it('revalidates the current month when resuming on the same day', async () => {
+    let requests = 0;
+    const hooks = loadFrontendHooks(async (path) => {
+      if (path.endsWith('/today')) throw new Error('today intentionally unavailable');
+      return { year: 2026, month: 9, records: [], total_work_minutes: ++requests * 60 };
+    });
+    hooks.setUser({ id: 1 });
+    hooks.setPage('summary');
+    hooks.setSummaryMonth('2026-09');
+    await hooks.loadSummary(false);
+    await Promise.all([hooks.refreshOnResume(), hooks.refreshOnResume()]);
+    expect(requests).toBe(2);
+    expect((await hooks.loadMonthData('2026-09', false)).total_work_minutes).toBe(120);
+  });
+
+  it('updates automatic punch time while preserving an explicitly edited time', () => {
+    const hooks = loadFrontendHooks();
+    const input = hooks.getElement('clock-in-time');
+    input.value = '00:01';
+    hooks.syncClockActionTime();
+    expect(input.value).toBe(hooks.nowTime());
+    hooks.setClockEdited(true);
+    input.value = '09:15';
+    hooks.syncClockActionTime();
+    expect(input.value).toBe('09:15');
+  });
+
+  it('keeps the original record tag while the draft changes', () => {
+    const hooks = loadFrontendHooks();
+    hooks.setEditor({ id: 7, revision: 3, persisted: true });
+    hooks.getElement('record-memo').value = 'unsaved';
+    expect(hooks.hasUnsavedRecord()).toBe(true);
+    expect(hooks.recordVersionHeaders()).toEqual({ 'If-Match': '"7:3"' });
+    hooks.setEditor({ persisted: false });
+    expect(hooks.recordVersionHeaders()).toEqual({ 'If-None-Match': '*' });
+    expect(hooks.recordVersionHeaders({ id: 9, revision: 2, persisted: true })).toEqual({ 'If-Match': '"9:2"' });
+  });
+});
+
+
+it('prints the full report and restores collapsed details and the screen filter', async () => {
+  const hooks = loadFrontendHooks(async () => ({ year: 2026, month: 9, records: [] }));
+  hooks.setPage('summary');
+  hooks.setSummaryMonth('2026-09');
+  await hooks.loadSummary(false);
+  hooks.getElement('summary-extra').open = false;
+  hooks.getElement('summary-incomplete-only').checked = true;
+  hooks.prepareSummaryPrint();
+  expect(hooks.getElement('summary-extra').open).toBe(true);
+  expect(hooks.getElement('summary-incomplete-only').checked).toBe(false);
+  hooks.restoreSummaryPrint();
+  expect(hooks.getElement('summary-extra').open).toBe(false);
+  expect(hooks.getElement('summary-incomplete-only').checked).toBe(true);
 });

@@ -55,8 +55,6 @@ type PublicUser = Pick<
 
 type LoginUser = User & { password_hash: string };
 
-const DUMMY_PASSWORD_HASH =
-  'pbkdf2_sha256$100000$000102030405060708090a0b0c0d0e0f$f5189e60cb03088f4e88e76da67f422cc0e45557767c3a85dc6b4c3e6c0825e0';
 const SETUP_TOKEN_PLACEHOLDERS = new Set([
   'change-me',
   'replace-with-openssl-rand-hex-32',
@@ -328,7 +326,7 @@ auth.post('/login', async (c) => {
     .bind(username)
     .first<LoginUser>();
 
-  const valid = await verifyPassword(password, row?.password_hash ?? DUMMY_PASSWORD_HASH);
+  const valid = await verifyPassword(password, row?.password_hash ?? null);
   if (!row || !valid) {
     return c.json({ error: 'ログインIDまたはパスワードが間違っています' }, 401);
   }
