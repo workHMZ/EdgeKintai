@@ -52,6 +52,9 @@
   "overrides": {
     "miniflare": {
       "undici": "^7.30.1"
+    },
+    "@cloudflare/vitest-plugin": {
+      "zod": "4.6.6"
     }
   }
 }
