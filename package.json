@@ -48,5 +48,10 @@
         "description": "Required one-time bootstrap secret. Generate with: openssl rand -hex 32"
       }
     }
+  },
+  "overrides": {
+    "miniflare": {
+      "undici": "^7.30.1"
+    }
   }
 }
