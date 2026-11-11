@@ -578,7 +578,7 @@
     };
   }
 
-  function createDayIcon(type) {
+  function createHolidayIcon() {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'today-day-icon');
     svg.setAttribute('viewBox', '0 0 24 24');
@@ -590,37 +590,23 @@
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
     svg.setAttribute('aria-hidden', 'true');
-    if (type === 'holiday') {
-      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      rect.setAttribute('x', '3');
-      rect.setAttribute('y', '4');
-      rect.setAttribute('width', '18');
-      rect.setAttribute('height', '18');
-      rect.setAttribute('rx', '2');
-      rect.setAttribute('ry', '2');
-      const l1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      l1.setAttribute('x1', '16'); l1.setAttribute('y1', '2'); l1.setAttribute('x2', '16'); l1.setAttribute('y2', '6');
-      const l2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      l2.setAttribute('x1', '8'); l2.setAttribute('y1', '2'); l2.setAttribute('x2', '8'); l2.setAttribute('y2', '6');
-      const l3 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      l3.setAttribute('x1', '3'); l3.setAttribute('y1', '10'); l3.setAttribute('x2', '21'); l3.setAttribute('y2', '10');
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx', '12'); circle.setAttribute('cy', '16'); circle.setAttribute('r', '2.2');
-      circle.setAttribute('fill', 'currentColor');
-      svg.append(rect, l1, l2, l3, circle);
-    } else {
-      const p1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      p1.setAttribute('d', 'M18 8h1a4 4 0 0 1 0 8h-1');
-      const p2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      p2.setAttribute('d', 'M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z');
-      const l1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      l1.setAttribute('x1', '6'); l1.setAttribute('y1', '1'); l1.setAttribute('x2', '6'); l1.setAttribute('y2', '4');
-      const l2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      l2.setAttribute('x1', '10'); l2.setAttribute('y1', '1'); l2.setAttribute('x2', '10'); l2.setAttribute('y2', '4');
-      const l3 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      l3.setAttribute('x1', '14'); l3.setAttribute('y1', '1'); l3.setAttribute('x2', '14'); l3.setAttribute('y2', '4');
-      svg.append(p1, p2, l1, l2, l3);
-    }
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', '3');
+    rect.setAttribute('y', '4');
+    rect.setAttribute('width', '18');
+    rect.setAttribute('height', '18');
+    rect.setAttribute('rx', '2');
+    rect.setAttribute('ry', '2');
+    const l1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    l1.setAttribute('x1', '16'); l1.setAttribute('y1', '2'); l1.setAttribute('x2', '16'); l1.setAttribute('y2', '6');
+    const l2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    l2.setAttribute('x1', '8'); l2.setAttribute('y1', '2'); l2.setAttribute('x2', '8'); l2.setAttribute('y2', '6');
+    const l3 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    l3.setAttribute('x1', '3'); l3.setAttribute('y1', '10'); l3.setAttribute('x2', '21'); l3.setAttribute('y2', '10');
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '12'); circle.setAttribute('cy', '16'); circle.setAttribute('r', '2.2');
+    circle.setAttribute('fill', 'currentColor');
+    svg.append(rect, l1, l2, l3, circle);
     return svg;
   }
 
@@ -649,7 +635,7 @@
     if (today.is_holiday) {
       holidayEl.dataset.type = 'holiday';
       holidayEl.hidden = false;
-      const icon = createDayIcon('holiday');
+      const icon = createHolidayIcon();
       const text = document.createElement('span');
       text.textContent = today.holiday_name || '祝日';
       holidayEl.append(icon, text);
@@ -886,7 +872,7 @@
         handleAuthenticatedError(error, '勤務を記録できませんでした。');
       }
     });
-    if (state.today) renderToday();
+    if (state.today) renderToday(true);
   }
 
   async function handleClockOut() {
@@ -925,7 +911,7 @@
         handleAuthenticatedError(error, '退勤を記録できませんでした。');
       }
     });
-    if (state.today) renderToday();
+    if (state.today) renderToday(true);
   }
 
   let calendarRequestVersion = 0;
@@ -1005,7 +991,7 @@
       } else if (record.is_holiday) {
         const badge = createElement('span', { className: 'type-badge holiday-badge' });
         badge.dataset.type = 'holiday';
-        const icon = createDayIcon('holiday');
+        const icon = createHolidayIcon();
         const text = document.createElement('span');
         text.textContent = record.holiday_name || '祝日';
         badge.append(icon, text);
@@ -1413,6 +1399,15 @@
         form.reset();
         toast('パスワードを変更し、ほかのセッションを無効にしました。', 'success');
       } catch (error) {
+        if (
+          error instanceof ApiError
+          && (error.status === 409 || (error.status === 401 && error.data?.error === 'Unauthorized'))
+        ) {
+          state.user = null;
+          state.today = null;
+          state.monthCache.clear();
+          showAuthentication(false);
+        }
         toast(errorMessage(error, 'パスワードを変更できませんでした。'), 'error');
       }
     });
@@ -1472,7 +1467,6 @@
     byId('record-work-type').value = defaultType;
     byId('record-clock-in').value = record.persisted ? (record.clock_in || '') : '';
     byId('record-clock-out').value = record.persisted ? (record.clock_out || '') : '';
-    updateDefaultTimesButton();
     byId('record-break').value = String(record.persisted ? record.break_minutes : userBreakMinutes());
     byId('record-one-way-fare').value = String(record.persisted ? (record.transport_one_way_fee ?? '') : (userOneWayFare() ?? ''));
     byId('record-trip-type').value = record.persisted
@@ -1503,6 +1497,7 @@
       field.hidden = !working;
       field.querySelectorAll('input, select, button').forEach((el) => { el.disabled = !working; });
     });
+    if (working) updateDefaultTimesButton();
     DOM.recordOfficeFields.forEach((field) => {
       field.hidden = !office;
       field.querySelectorAll('input, select').forEach((input) => { input.disabled = !office; });
@@ -1526,7 +1521,6 @@
         byId('record-clock-out').value = restoreOriginalWorkingRecord
           ? (originalRecord.clock_out || '')
           : '';
-        updateDefaultTimesButton();
       }
       if (office && previousType && previousType !== 'office') {
         const restoreOriginalCommute = originalRecord?.persisted && originalRecord.work_type === 'office';
@@ -2011,22 +2005,27 @@
     const records = Array.isArray(source.records)
       ? source.records.map((record) => normalizeRecord(record)).filter((record) => record.work_date)
       : [];
-    const derived = deriveSummary(records);
+    let derived = null;
+    const fallback = () => (derived ??= deriveSummary(records));
+    const totalWorkMinutes = Number.isFinite(Number(source.total_work_minutes))
+      ? Number(source.total_work_minutes)
+      : fallback().total_work_minutes;
+    const thresholdMinutes = finiteOr(source.overtime_threshold_minutes, state.config.overtime_threshold_hours * 60);
     return {
       year: boundedInteger(source.year, year, 1955, 2100),
       month: boundedInteger(source.month, month, 1, 12),
       username: safeString(source.username, state.user?.username || ''),
       employee_name: safeString(source.employee_name, state.user?.display_name || ''),
-      office_days: finiteOr(source.office_days, derived.office_days),
-      remote_days: finiteOr(source.remote_days, derived.remote_days),
-      paid_leave_days: finiteOr(source.paid_leave_days, derived.paid_leave_days),
-      absent_days: finiteOr(source.absent_days, derived.absent_days),
-      scheduled_work_days: finiteOr(source.scheduled_work_days, derived.scheduled_work_days),
-      incomplete_days: finiteOr(source.incomplete_days, derived.incomplete_days),
-      total_work_minutes: finiteOr(source.total_work_minutes, derived.total_work_minutes),
-      total_transport_fee: finiteOr(source.total_transport_fee, derived.total_transport_fee),
-      overtime_minutes: finiteOr(source.overtime_minutes, Math.max(0, derived.total_work_minutes - state.config.overtime_threshold_hours * 60)),
-      overtime_threshold_minutes: finiteOr(source.overtime_threshold_minutes, state.config.overtime_threshold_hours * 60),
+      office_days: Number.isFinite(Number(source.office_days)) ? Number(source.office_days) : fallback().office_days,
+      remote_days: Number.isFinite(Number(source.remote_days)) ? Number(source.remote_days) : fallback().remote_days,
+      paid_leave_days: Number.isFinite(Number(source.paid_leave_days)) ? Number(source.paid_leave_days) : fallback().paid_leave_days,
+      absent_days: Number.isFinite(Number(source.absent_days)) ? Number(source.absent_days) : fallback().absent_days,
+      scheduled_work_days: Number.isFinite(Number(source.scheduled_work_days)) ? Number(source.scheduled_work_days) : fallback().scheduled_work_days,
+      incomplete_days: Number.isFinite(Number(source.incomplete_days)) ? Number(source.incomplete_days) : fallback().incomplete_days,
+      total_work_minutes: totalWorkMinutes,
+      total_transport_fee: Number.isFinite(Number(source.total_transport_fee)) ? Number(source.total_transport_fee) : fallback().total_transport_fee,
+      overtime_minutes: finiteOr(source.overtime_minutes, Math.max(0, totalWorkMinutes - thresholdMinutes)),
+      overtime_threshold_minutes: thresholdMinutes,
       records,
       holiday_data: unwrap(source.holiday_data || {}),
     };
@@ -2205,6 +2204,8 @@
   function handleAuthenticatedError(error, fallback) {
     if (error instanceof ApiError && error.status === 401) {
       state.user = null;
+      state.today = null;
+      state.monthCache.clear();
       showAuthentication(false);
       toast('セッションの有効期限が切れました。もう一度ログインしてください。', 'error');
       return;

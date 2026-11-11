@@ -13,6 +13,8 @@ export async function checkRateLimit(
   if (!limiter || typeof limiter.limit !== 'function') {
     if (!localPreview) {
       console.error(JSON.stringify({
+        level: 'error',
+        event: 'rate_limiter_unavailable',
         message: 'authentication rate limiter binding is unavailable',
       }));
     }
@@ -24,6 +26,8 @@ export async function checkRateLimit(
     return result.success;
   } catch (error) {
     console.error(JSON.stringify({
+      level: 'error',
+      event: 'rate_limiter_failed',
       message: 'authentication rate limiter failed',
       error: error instanceof Error ? error.name : 'UnknownError',
     }));

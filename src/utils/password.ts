@@ -86,7 +86,7 @@ function timingSafeEqual(left: Uint8Array, right: Uint8Array): boolean {
   return difference === 0;
 }
 
-function toHex(bytes: Uint8Array): string {
+export function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 

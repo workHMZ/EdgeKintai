@@ -111,7 +111,7 @@
       destination: defaultTransportDestination,
       mode: defaultTransportMode,
     });
-    const derived = deriveMetrics(records, year, month);
+    const derived = deriveMetrics(records);
 
     return {
       year,
@@ -225,7 +225,7 @@
     return result;
   }
 
-  function deriveMetrics(records, year, month) {
+  function deriveMetrics(records) {
     const totals = {
       officeDays: 0,
       remoteDays: 0,
@@ -252,9 +252,6 @@
       totals.totalTransportFee += record.totalFare || 0;
     }
 
-    if (!records.length) {
-      totals.scheduledWorkDays = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    }
     return totals;
   }
 
@@ -366,9 +363,7 @@
       merges,
       freezeRows: 5,
       autoFilter: `A5:K${5 + summary.records.length}`,
-      printArea: `A1:K${lastRow}`,
       landscape: true,
-      repeatRows: '1:5',
       header: `&L${excelHeaderText(summary.employeeName)}&C${summary.year}年${summary.month}月 勤怠表&R&P / &N`,
       footer: '&L申請用&C社内確認用&R出力日 &D',
     });
@@ -477,9 +472,7 @@
       merges,
       freezeRows: 3,
       autoFilter: 'A13:D15',
-      printArea: `A1:D${lastRow}`,
       landscape: false,
-      repeatRows: '1:4',
       header: `&L${excelHeaderText(summary.employeeName)}&C月次サマリー&R&P / &N`,
       footer: '&L申請用&C社内確認用&R出力日 &D',
     });
@@ -559,9 +552,7 @@
       merges,
       freezeRows: 4,
       autoFilter: `A4:I${lastDataRow}`,
-      printArea: `A1:I${lastRow}`,
       landscape: true,
-      repeatRows: '1:4',
       header: `&L${excelHeaderText(summary.employeeName)}&C${summary.year}年${summary.month}月 交通費明細&R&P / &N`,
       footer: '&L申請用&C社内確認用&R出力日 &D',
     });

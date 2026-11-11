@@ -1,5 +1,6 @@
 import type { Holiday, HolidayData } from '../types';
-import { parseDatabaseTimestamp } from './time';
+import { formatDate, parseDatabaseTimestamp } from './time';
+import { readStreamBytesLimited } from './validation';
 
 const OFFICIAL_CSV_URL =
   'https://www8.cao.go.jp/chosei/shukujitsu/syukujitsu.csv';
@@ -52,13 +53,6 @@ type HolidayCacheRow = Holiday & {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-function formatUtcDate(d: Date): string {
-  const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 function generateRuleBasedHolidays(year: number): Holiday[] {
   // 1980-2099 eq calculation formulas
   const getAutumnal = (y: number) => Math.floor(23.2488 + 0.242194 * (y - 1980) - Math.floor((y - 1980) / 4));
@@ -99,7 +93,7 @@ function generateRuleBasedHolidays(year: number): Holiday[] {
     if (t2 - t1 === 2 * ONE_DAY_MS) {
       const mid = new Date(t1 + ONE_DAY_MS);
       if (mid.getUTCDay() !== 0) {
-        const midStr = formatUtcDate(mid);
+        const midStr = formatDate(mid);
         if (!holidaySet.has(midStr)) {
           holidaySet.add(midStr);
           citizenHolidays.push({ d: midStr, n: '休日' });
@@ -119,7 +113,7 @@ function generateRuleBasedHolidays(year: number): Holiday[] {
       const sub = new Date(d.getTime());
       while (true) {
         sub.setUTCDate(sub.getUTCDate() + 1);
-        const subStr = formatUtcDate(sub);
+        const subStr = formatDate(sub);
         if (!holidaySet.has(subStr)) {
           holidaySet.add(subStr);
           finalHolidays.push({ d: subStr, n: '休日' });
@@ -292,10 +286,9 @@ function unavailableHolidayData(year: number): HolidayData {
  */
 function ruleBasedHolidayData(year: number): HolidayData | null {
   if (year < RULE_BASED_MIN_YEAR || year > RULE_BASED_MAX_YEAR) return null;
-  const fallback = generateRuleBasedHolidays(year);
   return {
     year,
-    holidays: cloneHolidays(fallback),
+    holidays: generateRuleBasedHolidays(year),
     source: 'rule-based',
     complete: false,
     synced_at: null,
@@ -306,43 +299,25 @@ async function readResponseBytesLimited(
   response: Response,
   maximumBytes: number,
 ): Promise<Uint8Array> {
+  const exceedError = () => new Error('Cabinet Office holiday CSV exceeds the 1 MB safety limit');
   const contentLength = response.headers.get('content-length');
   if (contentLength !== null) {
     const declaredBytes = Number(contentLength);
     if (Number.isFinite(declaredBytes) && declaredBytes > maximumBytes) {
-      throw new Error('Cabinet Office holiday CSV exceeds the 1 MB safety limit');
+      await response.body?.cancel('response too large');
+      throw exceedError();
     }
   }
 
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength > maximumBytes) {
-      throw new Error('Cabinet Office holiday CSV exceeds the 1 MB safety limit');
+      throw exceedError();
     }
     return bytes;
   }
 
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > maximumBytes) {
-      await reader.cancel('response too large');
-      throw new Error('Cabinet Office holiday CSV exceeds the 1 MB safety limit');
-    }
-    chunks.push(value);
-  }
-
-  const combined = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return combined;
+  return readStreamBytesLimited(response.body, maximumBytes, exceedError);
 }
 
 /**

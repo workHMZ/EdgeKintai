@@ -1,4 +1,3 @@
-// @ts-expect-error Vitest raw import
 import appSource from '../public/app.js?raw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -71,10 +70,13 @@ interface TestHooks {
   getLastObservedDate: () => string;
   setLastObservedDate: (val: string) => void;
   setUser: (user: unknown) => void;
+  setConfig: (patch: Record<string, unknown>) => void;
   setToday: (today: unknown) => void;
+  getToday: () => unknown;
   setPage: (page: string) => void;
   setAdminMonth: (month: string) => void;
-  handleClockIn: (event: { preventDefault: () => void; submitter?: null }) => Promise<void>;
+  handleClockIn: (event: { preventDefault: () => void; submitter?: unknown }) => Promise<void>;
+  fillRecordDialog: (record: unknown) => void;
   setApiMock: (fn: (path: string, options?: Record<string, unknown>) => Promise<unknown>) => void;
 }
 
@@ -127,8 +129,11 @@ function loadFrontendHooks(
       getLastObservedDate: () => lastObservedDate,
       setLastObservedDate: (val) => { lastObservedDate = val; },
       setUser: (u) => { state.user = u; },
+      setConfig: (patch) => { Object.assign(state.config, patch); },
       setToday: (t) => { state.today = t; },
+      getToday: () => state.today,
       setPage: (p) => { state.page = p; },
+      fillRecordDialog,
       setApiMock: (fn) => { api = fn; },
       getElement: (id) => document.getElementById(id),
     };
@@ -180,25 +185,36 @@ function loadFrontendHooks(
   };
   // Stable per-id elements so a test can inspect what a render function produced.
   const elements = new Map<string, ReturnType<typeof createMockElement>>();
+  const getEl = (id: string) => {
+    if (!elements.has(id)) elements.set(id, createMockElement());
+    return elements.get(id)!;
+  };
+  const recordWorkingField = {
+    ...createMockElement(),
+    querySelectorAll: () => [
+      getEl('record-clock-in'),
+      getEl('record-clock-out'),
+      getEl('apply-default-times-button'),
+    ],
+  };
   const mockDoc = {
     documentElement: { dataset: {} },
     addEventListener: () => {},
     removeEventListener: () => {},
     querySelector: () => null,
-    querySelectorAll: () => [],
+    querySelectorAll: (selector?: string) => (
+      selector === '[data-record-working-field]' ? [recordWorkingField] : []
+    ),
     createElement: () => createMockElement(),
-    getElementById: (id: string) => {
-      if (!elements.has(id)) elements.set(id, createMockElement());
-      return elements.get(id)!;
-    },
+    getElementById: getEl,
   };
 
-  const fn = new Function('window', 'document', 'navigator', 'location', 'customApi', 'URL', `return ${instrumented}`);
+  const fn = new Function('window', 'document', 'navigator', 'location', 'customApi', 'URL', 'getComputedStyle', 'requestAnimationFrame', `return ${instrumented}`);
   const copied: string[] = [];
   const revoked: string[] = [];
   const hooks = fn(mockWindow, mockDoc, { userActivation: { isActive: true }, copied, clipboard: { writeText: async (text: string) => { copied.push(text); } } }, { pathname: '/' }, customApi, {
     revoked, createObjectURL: () => 'blob:test-workbook', revokeObjectURL: (url: string) => revoked.push(url),
-  }) as TestHooks;
+  }, () => ({ getPropertyValue: () => '' }), () => 0) as TestHooks;
   if (!hooks) throw new Error('Failed to load frontend hooks from public/app.js');
   return hooks;
 }
@@ -771,4 +787,72 @@ it('refreshes the admin overview when a date rollover happens on the admin page'
   hooks.setLastObservedDate('2026-10-01');
   await expect(hooks.handlePotentialDateRollover()).resolves.toBe(true);
   expect(requested).toEqual(['/api/attendance/today', '/api/admin/overview/2026/10']);
+});
+
+it('preserves edited punch form inputs when clock-in fails and clears state on 401', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-11-11T09:30:00+09:00'));
+  const originalFetch = globalThis.fetch;
+  let postStatus = 500;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (init?.method === 'POST' && path === '/api/attendance/clock-in') {
+      return new Response(JSON.stringify({ error: postStatus === 401 ? 'Unauthorized' : '一時エラー' }), {
+        status: postStatus,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({
+      date: '2026-11-11',
+      record: null,
+      defaults: { work_type: 'office', break_minutes: 60 },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const hooks = loadFrontendHooks();
+    hooks.setUser({ id: 1, default_break_minutes: 60, default_work_type: 'office' });
+    await hooks.loadToday();
+    const submitter = hooks.getElement('clock-in-button');
+    hooks.getElement('clock-work-type').value = 'remote';
+    hooks.getElement('clock-break').value = '30';
+
+    await hooks.handleClockIn({ preventDefault: () => {}, submitter });
+    expect(hooks.getElement('clock-work-type').value).toBe('remote');
+    expect(hooks.getElement('clock-break').value).toBe('30');
+    expect(submitter.disabled).toBe(false);
+
+    postStatus = 401;
+    await hooks.handleClockIn({ preventDefault: () => {}, submitter });
+    expect(hooks.getToday()).toBeNull();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+it('keeps apply-default-times-button disabled inside record working fields when defaults are unset', () => {
+  const hooks = loadFrontendHooks();
+  hooks.setConfig({ default_clock_in: null, default_clock_out: null });
+  hooks.setUser({ id: 1, default_clock_in: null, default_clock_out: null });
+  hooks.fillRecordDialog({
+    persisted: false,
+    work_date: '2026-11-11',
+    day_of_week: 3,
+    is_holiday: false,
+    holiday_name: '',
+  });
+  expect(hooks.getElement('apply-default-times-button').disabled).toBe(true);
+
+  hooks.setUser({ id: 1, default_clock_in: '09:30', default_clock_out: '18:30' });
+  hooks.fillRecordDialog({
+    persisted: false,
+    work_date: '2026-11-11',
+    day_of_week: 3,
+    is_holiday: false,
+    holiday_name: '',
+  });
+  expect(hooks.getElement('apply-default-times-button').disabled).toBe(false);
 });

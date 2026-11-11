@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { adminGuard } from '../middleware/adminGuard';
 import { authMiddleware, type AuthEnv } from '../middleware/auth';
 import type { Attendance, User } from '../types';
-import { stringifyAuditJson } from '../utils/audit';
+import { stringifyAuditJson, userAuditStatement } from '../utils/audit';
 import { getPublicConfig } from '../utils/config';
 import { buildHolidayMap, getRequiredHolidayData } from '../utils/holidays';
 import { hashPassword } from '../utils/password';
@@ -249,7 +249,7 @@ admin.patch('/users/:id', async (c) => {
   try {
     results = await c.env.DB.batch([
       update,
-      adminAuditStatement(c.env, actor.id, targetId, 'user_update', targetId, existing, after),
+      userAuditStatement(c.env, actor.id, targetId, 'user_update', existing, after),
       ...(existing.is_admin !== isAdmin
         ? [c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(targetId)]
         : []),
@@ -287,7 +287,7 @@ admin.post('/users/:id/password', async (c) => {
       'UPDATE users SET password_hash = ?, auth_version = auth_version + 1 WHERE id = ?',
     ).bind(passwordHash, targetId),
     c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(targetId),
-    adminAuditStatement(c.env, actor.id, targetId, 'password_reset', targetId, null, null),
+    userAuditStatement(c.env, actor.id, targetId, 'password_reset', null, null),
   ]);
   return c.json({ success: true });
 });
@@ -301,7 +301,7 @@ admin.delete('/users/:id', async (c) => {
 
   try {
     await c.env.DB.batch([
-      adminAuditStatement(c.env, actor.id, targetId, 'user_delete', targetId, target, null),
+      userAuditStatement(c.env, actor.id, targetId, 'user_delete', target, null),
       c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(targetId),
     ]);
   } catch (error) {
@@ -333,12 +333,7 @@ admin.get('/overview/:year/:month', async (c) => {
     getRequiredHolidayData(c.env, year),
   ]);
 
-  const recordsByUser = new Map<number, Attendance[]>();
-  for (const record of recordsResult.results) {
-    const records = recordsByUser.get(record.user_id) ?? [];
-    records.push(record);
-    recordsByUser.set(record.user_id, records);
-  }
+  const recordsByUser = Map.groupBy(recordsResult.results, (record) => record.user_id);
 
   const config = getPublicConfig(c.env);
   const holidayMap = buildHolidayMap(holidayData.holidays);
@@ -376,29 +371,6 @@ async function getUser(env: CloudflareBindings, id: number): Promise<ManagedUser
             default_clock_in, default_clock_out, default_break_minutes, default_work_type
      FROM users WHERE id = ?`,
   ).bind(id).first<ManagedUser>();
-}
-
-function adminAuditStatement(
-  env: CloudflareBindings,
-  actorId: number,
-  targetId: number,
-  action: string,
-  entityKey: number,
-  before: unknown,
-  after: unknown,
-): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO audit_logs (
-       actor_user_id, target_user_id, action, entity_type, entity_key, before_json, after_json
-     ) VALUES (?, ?, ?, 'user', ?, ?, ?)`,
-  ).bind(
-    actorId,
-    targetId,
-    action,
-    String(entityKey),
-    before === null ? null : stringifyAuditJson(before),
-    after === null ? null : stringifyAuditJson(after),
-  );
 }
 
 export default admin;

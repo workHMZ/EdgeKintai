@@ -1,4 +1,4 @@
-declare module '*.json?raw' {
-  const content: string;
-  export default content;
+declare module '*?raw' {
+  const value: string;
+  export default value;
 }

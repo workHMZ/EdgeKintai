@@ -391,7 +391,6 @@ select {
   cursor: pointer;
 }
 
-input[type="date"],
 input[type="time"] {
   display: inline-flex;
   align-items: center;
@@ -400,7 +399,6 @@ input[type="time"] {
   max-inline-size: 100%;
 }
 
-input[type="date"]::-webkit-date-and-time-value,
 input[type="time"]::-webkit-date-and-time-value {
   min-width: 0;
   text-align: start;
@@ -879,12 +877,6 @@ textarea:focus {
   letter-spacing: 0.04em;
 }
 
-.live-clock span {
-  color: var(--subtle);
-  font-size: 0.68rem;
-  font-weight: 800;
-}
-
 .today-hero-header {
   margin-bottom: 1.25rem;
   padding: 1.15rem 1.4rem;
@@ -993,18 +985,6 @@ textarea:focus {
 .holiday-label:empty,
 .holiday-label[hidden] {
   display: none !important;
-}
-
-.holiday-label[data-type="saturday"] {
-  color: var(--info);
-  background: color-mix(in srgb, var(--info) 14%, var(--surface));
-  border-color: color-mix(in srgb, var(--info) 38%, var(--border));
-}
-
-.holiday-label[data-type="sunday"] {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
-  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
 }
 
 .holiday-label[data-type="holiday"] {
@@ -2200,6 +2180,17 @@ tbody tr.is-incomplete-row td {
   tbody tr:nth-child(even) td {
     background: #f8fafc !important;
   }
+
+  .data-status,
+  .summary-filter,
+  .summary-extra > summary {
+    display: none !important;
+  }
+
+  #summary-table-body .text-button-link {
+    color: inherit;
+    text-decoration: none;
+  }
 }
 
 /* Include padding, chevron clearance and a little text margin in the minimum
@@ -2264,8 +2255,4 @@ tbody tr.is-incomplete-row td {
   .excel-label-compact {
     display: none;
   }
-}
-@media print {
-  .data-status, .summary-filter, .summary-extra > summary { display: none !important; }
-  #summary-table-body .text-button-link { color: inherit; text-decoration: none; }
 }

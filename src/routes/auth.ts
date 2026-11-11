@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
-import type { TransportMode, TransportTripType, User } from '../types';
-import { stringifyAuditJson } from '../utils/audit';
+import type { User } from '../types';
+import { stringifyAuditJson, userAuditStatement } from '../utils/audit';
 import { getPublicConfig } from '../utils/config';
 import { hashPassword, verifyPassword, verifySecret } from '../utils/password';
 import { checkRateLimit } from '../utils/rate-limit';
 import { toSqliteDateTime } from '../utils/time';
 import {
   authMiddleware,
+  type AuthEnv,
   clearSessionCookie,
   consumePasswordReauthentication,
   createSession,
@@ -21,6 +22,7 @@ import {
   boundedInteger,
   defaultWorkTypeValue,
   displayNameValue,
+  nullableBoundedInteger,
   optionalString,
   passwordValue,
   readJsonObject,
@@ -30,11 +32,6 @@ import {
   usernameValue,
   nullableTime,
 } from '../utils/validation';
-
-type AuthVars = {
-  Variables: { user: User };
-  Bindings: CloudflareBindings;
-};
 
 type PublicUser = Pick<
   User,
@@ -60,7 +57,7 @@ const SETUP_TOKEN_PLACEHOLDERS = new Set([
   'replace-with-openssl-rand-hex-32',
 ]);
 
-const auth = new Hono<AuthVars>();
+const auth = new Hono<AuthEnv>();
 
 function toPublicUser(user: User): PublicUser {
   return {
@@ -96,25 +93,6 @@ function credentialString(value: unknown, label: string, maxLength: number): str
   }
   return value;
 }
-
-function optionalFare(value: unknown): number | null | undefined {
-  if (value === undefined) return undefined;
-  if (value === null) return null;
-  return boundedInteger(value, 'デフォルト片道交通費', 0, 100_000);
-}
-
-function optionalTripType(value: unknown): TransportTripType | undefined {
-  return value === undefined ? undefined : tripTypeValue(value);
-}
-
-function optionalTransportMode(value: unknown): TransportMode | undefined {
-  return value === undefined ? undefined : transportModeValue(value);
-}
-
-auth.use('*', async (c, next) => {
-  c.header('Cache-Control', 'no-store');
-  await next();
-});
 
 // GET /api/auth/status
 auth.get('/status', async (c) => {
@@ -175,11 +153,18 @@ auth.post('/setup', async (c) => {
 
   const username = usernameValue(body.username);
   const password = passwordValue(body.password);
-  const requestedName = optionalString(body.display_name, '氏名', 80);
-  const displayName = requestedName ? displayNameValue(requestedName) : username;
-  const defaultOneWayFare = optionalFare(body.default_one_way_fare) ?? null;
-  const defaultTripType = optionalTripType(body.default_trip_type) ?? 'round_trip';
-  const defaultTransportMode = optionalTransportMode(body.default_transport_mode) ?? 'rail';
+  const displayName = body.display_name === undefined
+    || (typeof body.display_name === 'string' && body.display_name.trim() === '')
+    ? username
+    : displayNameValue(body.display_name);
+  const defaultOneWayFare = nullableBoundedInteger(
+    body.default_one_way_fare,
+    'デフォルト片道交通費',
+    0,
+    100_000,
+  ) ?? null;
+  const defaultTripType = tripTypeValue(body.default_trip_type, 'round_trip');
+  const defaultTransportMode = transportModeValue(body.default_transport_mode, 'rail');
   const defaultTransportOrigin = optionalString(body.default_transport_origin, '出発地', 120) ?? '';
   const defaultTransportDestination = optionalString(body.default_transport_destination, '到着地', 120) ?? '';
   const defaultClockIn = nullableTime(body.default_clock_in, 'デフォルト出勤時間') ?? null;
@@ -349,8 +334,9 @@ auth.post('/logout', async (c) => {
     await revokeSession(c.env, token);
   } catch (error) {
     console.error(JSON.stringify({
-      message: 'session revocation failed',
-      error: error instanceof Error ? error.message : String(error),
+      level: 'error',
+      event: 'session_revocation_failed',
+      error: error instanceof Error ? error.name : 'UnknownError',
     }));
     return c.json(
       { error: 'ログアウトに失敗しました。しばらくしてからもう一度お試しください' },
@@ -391,9 +377,18 @@ auth.patch('/profile', authMiddleware, async (c) => {
   const displayName = body.display_name === undefined
     ? undefined
     : displayNameValue(body.display_name);
-  const defaultOneWayFare = optionalFare(body.default_one_way_fare);
-  const defaultTripType = optionalTripType(body.default_trip_type);
-  const defaultTransportMode = optionalTransportMode(body.default_transport_mode);
+  const defaultOneWayFare = nullableBoundedInteger(
+    body.default_one_way_fare,
+    'デフォルト片道交通費',
+    0,
+    100_000,
+  );
+  const defaultTripType = body.default_trip_type === undefined
+    ? undefined
+    : tripTypeValue(body.default_trip_type);
+  const defaultTransportMode = body.default_transport_mode === undefined
+    ? undefined
+    : transportModeValue(body.default_transport_mode);
   const defaultTransportOrigin = body.default_transport_origin === undefined
     ? undefined
     : optionalString(body.default_transport_origin, '出発地', 120) ?? '';
@@ -513,7 +508,7 @@ auth.patch('/profile', authMiddleware, async (c) => {
   };
   const results = await c.env.DB.batch([
     update,
-    authAuditStatement(c.env, currentUser.id, 'profile_update', currentUser, afterForAudit),
+    userAuditStatement(c.env, currentUser.id, currentUser.id, 'profile_update', currentUser, afterForAudit),
   ]);
   const updated = results[0]?.results?.[0] as User | undefined;
 
@@ -586,7 +581,7 @@ auth.post('/profile/password', authMiddleware, async (c) => {
       .bind(passwordHash, currentUser.id),
     c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?')
       .bind(currentUser.id),
-    authAuditStatement(c.env, currentUser.id, 'password_change', null, null),
+    userAuditStatement(c.env, currentUser.id, currentUser.id, 'password_change', null, null),
   ]);
   const credential = results[0]?.results?.[0] as { auth_version: number } | undefined;
   if (!credential) return c.json({ error: 'Unauthorized' }, 401);
@@ -605,27 +600,6 @@ auth.post('/profile/password', authMiddleware, async (c) => {
     { 'Set-Cookie': setSessionCookie(session) },
   );
 });
-
-function authAuditStatement(
-  env: CloudflareBindings,
-  userId: number,
-  action: string,
-  before: unknown,
-  after: unknown,
-): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO audit_logs (
-       actor_user_id, target_user_id, action, entity_type, entity_key, before_json, after_json
-     ) VALUES (?, ?, ?, 'user', ?, ?, ?)`,
-  ).bind(
-    userId,
-    userId,
-    action,
-    String(userId),
-    before === null ? null : stringifyAuditJson(before),
-    after === null ? null : stringifyAuditJson(after),
-  );
-}
 
 function clientAddress(request: Request): string {
   return request.headers.get('CF-Connecting-IP')?.slice(0, 64) || 'unknown';

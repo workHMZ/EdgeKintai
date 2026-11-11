@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { RequestValidationError, usernameValue, passwordValue, displayNameValue } from '../src/utils/validation';
+import {
+  displayNameValue,
+  optionalString,
+  passwordValue,
+  RequestValidationError,
+  usernameValue,
+} from '../src/utils/validation';
 
 describe('validation utilities', () => {
   it('validates usernames correctly', () => {
@@ -20,5 +26,13 @@ describe('validation utilities', () => {
     expect(displayNameValue('山田 太郎')).toBe('山田 太郎');
     expect(() => displayNameValue('   ')).toThrow(RequestValidationError); // Empty or just spaces
     expect(() => displayNameValue('a'.repeat(81))).toThrow(RequestValidationError); // Too long
+  });
+
+  it('distinguishes length violations from control characters in optional strings', () => {
+    expect(optionalString(undefined, '出発地', 10)).toBeUndefined();
+    expect(optionalString('  新宿駅  ', '出発地', 10)).toBe('新宿駅');
+    expect(() => optionalString('あ'.repeat(11), '出発地', 10)).toThrow('出発地は最大10文字までです');
+    expect(() => optionalString('新宿\u0000駅', '出発地', 10)).toThrow('出発地に無効な文字が含まれています');
+    expect(() => optionalString('\u200B', '出発地', 10)).toThrow('出発地に無効な文字が含まれています');
   });
 });

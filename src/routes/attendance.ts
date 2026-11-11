@@ -5,6 +5,7 @@ import { getUserAttendanceDefaults, getUserCommuteDefaults } from '../utils/conf
 import { buildHolidayMap, getHolidayData } from '../utils/holidays';
 import { buildMonthlySummary } from '../utils/summary';
 import {
+  dayOfWeek,
   elapsedShiftMinutes,
   MAX_SHIFT_MINUTES,
   nowTimeJST,
@@ -121,15 +122,15 @@ attendance.get('/today', async (c) => {
   const activeRecord = staleRecord ? null : recentOpenRecord;
   const holidayName = buildHolidayMap(holidayData.holidays).get(date) ?? null;
   const commuteDefaults = getUserCommuteDefaults(c.env, user);
-  const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
-  const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
+  const attendanceDefaults = getUserAttendanceDefaults(user);
+  const weekday = dayOfWeek(date);
 
   return c.json({
     date,
-    day_of_week: dayOfWeek,
+    day_of_week: weekday,
     is_holiday: holidayName !== null,
     holiday_name: holidayName,
-    is_weekend: dayOfWeek === 0 || dayOfWeek === 6,
+    is_weekend: weekday === 0 || weekday === 6,
     record: record ?? null,
     active_record: activeRecord ?? null,
     stale_record: staleRecord,
@@ -164,7 +165,7 @@ attendance.post('/clock-in', async (c) => {
     'transport_destination',
     'transport_one_way_fee',
   ]);
-  const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
+  const attendanceDefaults = getUserAttendanceDefaults(user);
   const workType = workTypeValue(body.work_type, attendanceDefaults.work_type);
   if (!isClockable(workType)) {
     throw new RequestValidationError('打刻は出社または在宅勤務のみ選択可能です');
@@ -292,15 +293,11 @@ attendance.post('/clock-out', async (c) => {
     if (openRecord.clock_in && timeToMinutes(clockOut) < timeToMinutes(openRecord.clock_in)) {
       throw new RequestValidationError('退勤時刻が出勤時刻より前です。時刻を確認してください');
     }
-  } else if (openRecord.work_date === previousDate(date)) {
-    if (
-      openRecord.clock_in
-      && timeToMinutes(clockOut) >= timeToMinutes(openRecord.clock_in)
-    ) {
-      return c.json({ error: '前日の出勤から24時間を経過しています。打刻修正画面から修正してください' }, 409);
-    }
-  } else {
-    return c.json({ error: `${openRecord.work_date} の未退勤記録が残っています。打刻修正画面から修正してください` }, 409);
+  } else if (
+    openRecord.clock_in
+    && timeToMinutes(clockOut) >= timeToMinutes(openRecord.clock_in)
+  ) {
+    return c.json({ error: '前日の出勤から24時間を経過しています。打刻修正画面から修正してください' }, 409);
   }
 
   if (openRecord.clock_in) {
@@ -360,7 +357,7 @@ attendance.put('/:date', async (c) => {
   }
   if (!matchesRecord(c.req.raw, existing)) return c.json({ error: recordConflict }, 412);
 
-  const attendanceDefaults = getUserAttendanceDefaults(c.env, user);
+  const attendanceDefaults = getUserAttendanceDefaults(user);
   const defaults = getUserCommuteDefaults(c.env, user);
   const workType = workTypeValue(body.work_type, existing?.work_type ?? attendanceDefaults.work_type);
   let clockIn = nullableTime(body.clock_in, '出勤時刻');

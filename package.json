@@ -1,6 +1,6 @@
 {
   "name": "edge-kintai",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "description": "Cloudflare-native attendance tracker for Japan",
   "private": true,
   "license": "MIT",
@@ -30,17 +30,17 @@
     "verify": "npm run build && npm run cf-typegen:check && npm run deploy:cf:check && npm run lint:frontend && npm run test:ui && npm run test:excel && npm test"
   },
   "dependencies": {
-    "hono": "^4.13.13"
+    "hono": "^4.13.17"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "^1.4.4",
-    "@cloudflare/workers-types": "^5.20261016.1",
+    "@cloudflare/vitest-plugin": "^1.7.0",
+    "@cloudflare/workers-types": "^5.20261110.1",
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.13.0",
-    "globals": "^17.13.0",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5",
-    "wrangler": "^4.151.1"
+    "vitest": "^5.1.0",
+    "wrangler": "^4.160.0"
   },
   "cloudflare": {
     "bindings": {
@@ -50,11 +50,6 @@
     }
   },
   "overrides": {
-    "miniflare": {
-      "undici": "^7.30.1"
-    },
-    "@cloudflare/vitest-plugin": {
-      "zod": "4.6.6"
-    }
+    "minimatch": "^11.0.7"
   }
 }

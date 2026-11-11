@@ -1,6 +1,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { User } from '../types';
 import { getSessionTtlSeconds } from '../utils/config';
+import { toHex } from '../utils/password';
 import { parseDatabaseTimestamp, toSqliteDateTime } from '../utils/time';
 
 export type AuthEnv = {
@@ -31,13 +32,9 @@ const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
  */
 const SESSION_ABSOLUTE_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 async function hashSessionToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
-  return bytesToHex(new Uint8Array(digest));
+  return toHex(new Uint8Array(digest));
 }
 
 async function requestSessionHash(request: Request): Promise<string | null> {
@@ -46,7 +43,7 @@ async function requestSessionHash(request: Request): Promise<string | null> {
 }
 
 function newOpaqueToken(): string {
-  return bytesToHex(crypto.getRandomValues(new Uint8Array(SESSION_TOKEN_BYTES)));
+  return toHex(crypto.getRandomValues(new Uint8Array(SESSION_TOKEN_BYTES)));
 }
 
 export function getSessionToken(request: Request): string | null {
@@ -149,12 +146,12 @@ export async function markSessionReauthenticated(
   request: Request,
   userId: number,
 ): Promise<string | null> {
-  const [tokenHash, reauthToken] = await Promise.all([
+  const reauthToken = newOpaqueToken();
+  const [tokenHash, reauthTokenHash] = await Promise.all([
     requestSessionHash(request),
-    Promise.resolve(newOpaqueToken()),
+    hashSessionToken(reauthToken),
   ]);
   if (!tokenHash) return null;
-  const reauthTokenHash = await hashSessionToken(reauthToken);
   const nowSql = toSqliteDateTime(new Date());
   const result = await env.DB.prepare(
     `UPDATE sessions
@@ -173,9 +170,11 @@ export async function consumePasswordReauthentication(
   reauthToken: string,
 ): Promise<boolean> {
   if (!TOKEN_PATTERN.test(reauthToken)) return false;
-  const tokenHash = await requestSessionHash(request);
+  const [tokenHash, reauthTokenHash] = await Promise.all([
+    requestSessionHash(request),
+    hashSessionToken(reauthToken),
+  ]);
   if (!tokenHash) return false;
-  const reauthTokenHash = await hashSessionToken(reauthToken);
   const now = Date.now();
   const nowSql = toSqliteDateTime(new Date(now));
   const minReauthSql = toSqliteDateTime(new Date(now - 5 * 60 * 1000));

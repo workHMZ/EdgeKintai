@@ -29,21 +29,12 @@ export async function readJsonObject(
   return value as Record<string, unknown>;
 }
 
-export async function readBodyBytes(request: Request, maxBytes: number): Promise<Uint8Array> {
-  const lengthHeader = request.headers.get('content-length');
-  if (lengthHeader) {
-    const length = Number(lengthHeader);
-    if (!Number.isInteger(length) || length < 0) {
-      throw new RequestValidationError('Content-Lengthが正しくありません');
-    }
-    if (length > maxBytes) {
-      throw new RequestValidationError('リクエストのサイズが大きすぎます', 413);
-    }
-  }
-
-  if (!request.body) return new Uint8Array();
-
-  const reader = request.body.getReader();
+export async function readStreamBytesLimited(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  onExceed: () => Error,
+): Promise<Uint8Array> {
+  const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
 
@@ -53,8 +44,8 @@ export async function readBodyBytes(request: Request, maxBytes: number): Promise
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel('body too large');
-        throw new RequestValidationError('リクエストのサイズが大きすぎます', 413);
+        await reader.cancel('stream too large');
+        throw onExceed();
       }
       chunks.push(value);
     }
@@ -69,6 +60,28 @@ export async function readBodyBytes(request: Request, maxBytes: number): Promise
     offset += chunk.byteLength;
   }
   return bytes;
+}
+
+export async function readBodyBytes(request: Request, maxBytes: number): Promise<Uint8Array> {
+  const lengthHeader = request.headers.get('content-length');
+  if (lengthHeader) {
+    const length = Number(lengthHeader);
+    if (!Number.isInteger(length) || length < 0) {
+      throw new RequestValidationError('Content-Lengthが正しくありません');
+    }
+    if (length > maxBytes) {
+      await request.body?.cancel('body too large');
+      throw new RequestValidationError('リクエストのサイズが大きすぎます', 413);
+    }
+  }
+
+  if (!request.body) return new Uint8Array();
+
+  return readStreamBytesLimited(
+    request.body,
+    maxBytes,
+    () => new RequestValidationError('リクエストのサイズが大きすぎます', 413),
+  );
 }
 
 export function requiredString(
@@ -90,8 +103,11 @@ export function optionalString(value: unknown, label: string, maxLength: number)
   if (value === undefined) return undefined;
   if (typeof value !== 'string') throw new RequestValidationError(`${label}の形式が正しくありません`);
   const normalized = value.normalize('NFKC').trim();
-  if (normalized.length > maxLength || /\p{C}/u.test(normalized)) {
+  if (normalized.length > maxLength) {
     throw new RequestValidationError(`${label}は最大${maxLength}文字までです`);
+  }
+  if (/\p{C}/u.test(normalized)) {
+    throw new RequestValidationError(`${label}に無効な文字が含まれています`);
   }
   return normalized;
 }

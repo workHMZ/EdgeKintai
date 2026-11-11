@@ -61,21 +61,12 @@ export function getUserCommuteDefaults(
 }
 
 export function getUserAttendanceDefaults(
-  env: CloudflareBindings,
-  user: Pick<
-    User,
-    'default_clock_in' | 'default_clock_out' | 'default_break_minutes' | 'default_work_type'
-  >,
+  user: Pick<User, 'default_break_minutes' | 'default_work_type'>,
 ): {
-  clock_in: string | null;
-  clock_out: string | null;
   break_minutes: number;
   work_type: 'office' | 'remote';
 } {
-  const config = getPublicConfig(env);
   return {
-    clock_in: user.default_clock_in ?? config.default_clock_in,
-    clock_out: user.default_clock_out ?? config.default_clock_out,
     break_minutes: user.default_break_minutes,
     work_type: user.default_work_type,
   };

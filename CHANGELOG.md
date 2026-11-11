@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.9.1 — 2026-11-11
+
+- Preserve unsubmitted break-duration and work-type edits when a clock-in or clock-out request fails.
+- Keep the default-times button disabled in the record editor when neither personal nor application default times are configured.
+- Clear cached client session state and return to the login screen when password updates hit a session conflict or expiry.
+- Report control-character validation errors separately from length errors in optional string inputs, and validate non-blank setup display names consistently.
+- Release stream reader locks and cancel unconsumed request and Cabinet Office holiday CSV streams when exceeding size limits.
+- Consolidate duplicate user audit statements, hex encoding, holiday date helpers, monthly overview grouping (`Map.groupBy`), unused styles and redundant frontend/Excel helpers.
+- Update Cloudflare Workers `compatibility_date` to `2026-11-10`, enable source maps and structured trace/log observability with query-string redaction, and read shared test configuration directly from `wrangler.jsonc` without loading `.dev.vars`.
+- Update Hono, Wrangler, Cloudflare Workers types, `@cloudflare/vitest-plugin`, Vitest, ESLint and `globals`; replace superseded `undici`/`zod` overrides with `minimatch` `^11.0.7` (`npm audit`: 0 vulnerabilities).
+
 ## 2.9.0 — 2026-10-18
 
 - Consolidate the current database schema into `migrations/001_schema.sql`.
